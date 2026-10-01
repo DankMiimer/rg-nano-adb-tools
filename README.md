@@ -57,6 +57,10 @@ welcome.
    usbmode/build_usbmode_opk.sh --refresh
    ```
 
+   Rather not build it? Prebuilt OPKs, checksums and install steps (including for a
+   Nano that is still in storage mode) are attached to the
+   [latest release](https://github.com/DankMiimer/rg-nano-adb-tools/releases/latest).
+
    If `./nanoctl` isn't executable, run `bash nanoctl ...` or `chmod +x nanoctl`.
 
 ## Commands

@@ -11,7 +11,12 @@ pressing it will do:
 
 ## Install
 
-The Nano must be in ADB mode (the installer talks to it with `nanoctl`).
+**Prebuilt:** download `SwitchToUSB.opk` and `SwitchToADB.opk` from the
+[latest release](https://github.com/DankMiimer/rg-nano-adb-tools/releases/latest);
+its notes explain how to install them whichever mode the Nano is in.
+
+**From source:** the Nano must be in ADB mode (the installer talks to it with
+`nanoctl`).
 
 ```bash
 usbmode/build_usbmode_opk.sh --refresh
