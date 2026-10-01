@@ -147,6 +147,37 @@ flashes red/blue and the menu restarts a few times. The USB mode, your menu
 entries and your files are not changed (the mode-switch tests are dry runs with
 everything redirected to `/tmp`, and show no notices).
 
+## Prior art and related work
+
+ADB on the Nano is not new, and this project doesn't claim it is:
+
+- **ADB support itself** is part of DrUm78's FunKey-OS. Its
+  [release notes](https://github.com/DrUm78/FunKey-OS/releases/tag/FunKey-OS-DrUm78)
+  describe creating an empty `adb` file on the card, restarting and running
+  `adb shell`; the trick has also been shared in the FunKey community Discord since
+  at least 2023.
+- **SSH over USB networking** has an
+  [SSH page in the official docs](https://doc.funkey-project.com/developer_guide/tutorials/ssh_connection/)
+  and was written up by community members in 2022.
+- **Running an app from a remote shell** needs the menu out of the way: `opkrun` has
+  been reported to fail with "failed to set video mode" while the menu is running,
+  and the community advice has been to kill the front end by hand.
+
+What this repo adds on top is tooling, not the feature: `run` with a real exit
+status on this firmware's old `adbd`; a `dev` loop that pauses the menu for you and
+restores it on any exit (even a pulled cable) without writing anything to the card;
+one-command screenshots; the self-labelling Switch to USB / Switch to ADB shortcut;
+WSL/Windows path handling; and an integration test suite. When this was written
+(October 2026) I did not find another packaged tool of this kind, but my search
+could easily have missed one: if you know of one, please say so.
+
+Related projects that solve different problems: the
+[FunKey SDK guide](https://doc.funkey-project.com/developer_guide/tutorials/build_system/build_program_using_sdk/)
+for cross-compiling programs (this repo doesn't compile your programs),
+[rgnano_sample_rs](https://github.com/bluexe203/rgnano_sample_rs) (a Rust toolchain
+for Windows) and [funkeymonkey](https://github.com/bzar/funkeymonkey) (an on-device
+evdev/uinput tool).
+
 ## Credits
 
 Built on the work of the [FunKey Project](https://github.com/FunKey-Project) and

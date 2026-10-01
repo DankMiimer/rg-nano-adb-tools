@@ -19,8 +19,9 @@ shown as a drive when you mount USB storage from a PC):
 
 The table is read from the scripts; only the "none" and `adb` rows were actually
 exercised on a device (the `usbnet` row is untested here, and on at least one
-Windows machine the RNDIS driver failed to install). `adb` wins if both are
-present. In ADB mode the Nano still charges from the PC.
+Windows machine the RNDIS driver failed to install; a 2022 write-up by a community
+member in the FunKey Discord likewise says Windows needs the RNDIS driver assigned
+by hand in Device Manager). `adb` wins if both are present. In ADB mode the Nano still charges from the PC.
 On the Nano, `/usr/local/sbin/adb start|stop` and `/usr/bin/adbd` do the work.
 
 Because the markers are read only at boot, **replugging the cable changes
@@ -43,6 +44,25 @@ last tagged release I could find (2.3.0, June 2021). So:
   [DrUm78's FunKey-OS fork](https://github.com/DrUm78/FunKey-OS) (kernel
   `4.14.14-funkey`, built 2026-01-18), whose repository contains the `adb` script.
   That repository was archived (read-only) in April 2026.
+
+## Documentation and prior art
+
+None of this is new, and it isn't presented as such:
+
+- The ADB mode is documented in the
+  [release notes of DrUm78's FunKey-OS](https://github.com/DrUm78/FunKey-OS/releases/tag/FunKey-OS-DrUm78):
+  mount the USB drive, create an empty `adb` file at its root, unmount, restart the
+  device, then run `adb shell` with the Android platform tools installed. The steps
+  on this page are the same, plus the caveats found while using it (reboot needed,
+  no drive in ADB mode, how to find out whether a build supports it).
+- The same trick has been shared in the FunKey community Discord since at least
+  2023, including an alternative that starts `adbd` from an init script on every
+  boot instead of using the marker file.
+- SSH over USB networking (the `usbnet` marker) has an
+  [SSH page in the official docs](https://doc.funkey-project.com/developer_guide/tutorials/ssh_connection/)
+  and was written up by community members in 2022.
+
+What `nanoctl` and the USB Mode shortcut add on top is tooling; see the README.
 
 ## Find out whether yours supports it
 
