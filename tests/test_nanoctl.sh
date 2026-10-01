@@ -7,7 +7,7 @@ require_adb_mode
 echo "== 0. syntax / help / version =="
 bash -n "$R" && ok "bash -n" || bad "bash -n"
 "$R" help | grep -q 'NANO_SERIAL' && ok "help lists the environment" || bad "help text"
-check "version" "nanoctl 0.1.0" "$("$R" version)"
+check "version" "nanoctl 0.1.1" "$("$R" version)"
 "$R" nonsense >/dev/null 2>&1; check "unknown command exits 2" 2 $?
 
 echo "== 1. status =="
@@ -79,6 +79,19 @@ NANO_STAGE_DIR="$STAGE" "$R" push-text "$WORK/crlf.sh" "$T/staged.sh" >/dev/null
 NANO_STAGE_DIR="$STAGE" "$R" pull "$T/staged.dat" "$WORK/staged.back" >/dev/null 2>&1
 check "staged transfers still correct" "$want" "$(sha256sum "$WORK/staged.back" | cut -d' ' -f1)"
 check "no staged temp files left behind" "0" "$(ls -A "$STAGE" 2>/dev/null | wc -l)"
+
+if command -v wslpath >/dev/null 2>&1; then
+  # Regression: a Windows path of 260+ characters made adb.exe fail with
+  # "cannot stat" on a file that exists, for push and for pull.
+  deep="$DRV"
+  while [ ${#deep} -lt 300 ]; do deep="$deep/long_directory_name_to_pass_the_windows_max_path"; done
+  mkdir -p "$deep"
+  cp "$WORK/bin.dat" "$deep/in.dat"
+  "$R" push "$deep/in.dat" "$T/deep.dat" 2>/dev/null
+  check "push from a >260-char Windows path" "$want" "$("$R" run "sha256sum $T/deep.dat" | cut -d' ' -f1)"
+  "$R" pull "$T/deep.dat" "$deep/out.dat" 2>/dev/null
+  check "pull to a >260-char Windows path" "$want" "$(sha256sum "$deep/out.dat" | cut -d' ' -f1)"
+fi
 
 echo "== 4. error messages =="
 M="$(NANO_SERIAL=bogus "$R" run hostname 2>&1)"; rc=$?

@@ -26,7 +26,9 @@ data. `push-text` strips CRs first (via a staged temporary copy).
 Under WSL the USB device belongs to Windows, so `adb.exe` is used and needs
 Windows paths: `wslpath -w` converts anything under `/mnt/<drive>/`. Files in the
 Linux filesystem are copied through the **Windows temp folder** first
-(`NANO_STAGE_DIR` overrides it) and removed afterwards. (`adb.exe` can often read
+(`NANO_STAGE_DIR` overrides it) and removed afterwards. So are files whose Windows
+path is 240+ characters long: `adb.exe` is not long-path aware and fails with
+"cannot stat" at `MAX_PATH` (260), even for a file that exists. (`adb.exe` can often read
 `\\wsl.localhost\...` paths too, but it is slower and less predictable.)
 `cmd.exe` is only used to ask for `%TEMP%`; it isn't on a clean WSL `PATH`, so it
 is also looked up under `/mnt/<drive>/Windows/System32`.

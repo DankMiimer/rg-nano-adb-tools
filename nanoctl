@@ -17,7 +17,7 @@
 
 set -euo pipefail
 
-NANOCTL_VERSION="0.1.0"
+NANOCTL_VERSION="0.1.1"
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 
 ADB_BIN=""
@@ -199,8 +199,14 @@ is_drive_path() {
 
 # Files inside the WSL filesystem are only reachable from adb.exe as UNC paths,
 # which are slow and flaky, so they are copied through the Windows temp folder.
+# So are files whose Windows path is too long: adb.exe is not long-path aware and
+# fails with "cannot stat" at MAX_PATH (260), so stage from 240 characters up.
 adb_needs_staging() {
-  adb_needs_winpath && ! is_drive_path "$1"
+  adb_needs_winpath || return 1
+  is_drive_path "$1" || return 0
+  local w
+  w="$(adb_local_path "$1")"
+  [ "${#w}" -ge 240 ]
 }
 
 adb_local_path() {
