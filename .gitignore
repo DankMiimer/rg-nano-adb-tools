@@ -1,0 +1,19 @@
+# screenshots taken with `nanoctl shot`
+shots/
+
+# staging area for adb.exe (only used if you point NANO_STAGE_DIR into the repo)
+.nano_stage/
+
+# OPKs built by usbmode/build_usbmode_opk.sh (build output, not source)
+*.opk
+
+# editors / OS / Python
+__pycache__/
+*.pyc
+.DS_Store
+Thumbs.db
+.vscode/
+.idea/
+
+# local assistant settings
+.claude/

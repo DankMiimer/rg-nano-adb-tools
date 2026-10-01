@@ -1,0 +1,568 @@
+#!/usr/bin/env bash
+# nanoctl - drive an Anbernic RG Nano (FunKey OS) over USB with adb.
+#
+# Run `nanoctl help` for the commands, README.md for the overview and
+# docs/HOW_IT_WORKS.md for why it is built the way it is.
+#
+# This firmware's adbd is an old build (verified on the device), which is why
+# this is more than a thin wrapper around `adb`:
+#   - `adb shell` has no exit codes and prints CRLF -> adb_sh appends a status
+#     marker and strips the CRs, so `run` returns the remote command's status.
+#   - a shell never sees EOF on stdin -> nothing is streamed through
+#     `adb shell`; files go through `adb push` / `adb pull`, and `run` cannot
+#     read stdin.
+#   - under WSL the Windows adb.exe is used (the USB device belongs to Windows);
+#     local paths are converted with wslpath, and files outside /mnt/<drive>/
+#     are staged through the Windows temp folder.
+
+set -euo pipefail
+
+NANOCTL_VERSION="0.1.0"
+SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+
+ADB_BIN=""
+ADB_SERIAL="${NANO_SERIAL:-${ANDROID_SERIAL:-}}"
+STAGE_DIR="${NANO_STAGE_DIR:-}"
+SHOT_DIR="${NANO_SHOT_DIR:-$SCRIPT_DIR/shots}"
+DEV_DIR="${NANO_DEV_DIR:-/tmp/nano_dev}"
+READY=""
+STAGE_TMP=""
+STAGED=()
+
+warn() { printf 'nanoctl: %s\n' "$*" >&2; }
+die() { warn "$*"; exit 1; }
+
+cleanup_stage() {
+  local f
+  for f in ${STAGED[@]+"${STAGED[@]}"}; do
+    [ -n "$f" ] && rm -f "$f"
+  done
+}
+trap cleanup_stage EXIT
+
+usage() {
+  cat <<'EOF'
+Usage: nanoctl <command> [args]
+
+Connection:
+  status                     Show the device and its USB mode (adb or storage)
+  shell                      Open an interactive shell
+  run <remote command...>     Run a command on the Nano; the exit status is the
+                             command's (stdin is not forwarded)
+
+Screen and dev loop:
+  shot [file.png]            Screenshot of the Nano's screen, saved to file.png
+                             (default shots/shot_<time>.png); prints the path
+  dev [--timeout SEC] [--shot SEC[,SEC...]] [--force] <app> [args...]
+                             Pause the menu, run <app> with its output streamed
+                             here, then restart the menu. <app> is a local
+                             script/binary (pushed to /tmp/nano_dev first), a
+                             local .opk (run with opkrun, like the menu does) or
+                             a path/command on the device. The exit status is
+                             the app's. --timeout kills it after SEC seconds;
+                             --shot takes screenshots SEC seconds after it
+                             starts; --force runs even if no menu is running.
+  restart-menu               Restart the menu (also frees a menu left paused)
+
+Files:
+  push <local> <remote> [mode]
+  push-text <local> <remote> [mode]   Strip CRs while pushing scripts/config
+  pull <remote file> <local>
+
+Environment:
+  NANO_ADB             Path to adb / adb.exe (default: the first one found that
+                       sees a device - PATH, then the usual SDK locations)
+  NANO_SERIAL          adb serial when several devices are attached
+                       (ANDROID_SERIAL works too)
+  NANO_SHOT_DIR        Where `shot` saves by default (default: shots/ next to
+                       this script)
+  NANO_DEV_DIR         Where `dev` stages local apps on the device
+                       (default /tmp/nano_dev, a RAM disk: gone on reboot)
+  NANO_DEV_FRONTENDS   Menu process names `dev` pauses (default
+                       "gmenu2x retrofe")
+  NANO_STAGE_DIR       WSL only: where files outside /mnt/<drive>/ are staged
+                       for adb.exe (default: the Windows temp folder)
+EOF
+}
+
+shell_quote() {
+  local value="${1-}"
+  printf "'%s'" "$(printf '%s' "$value" | sed "s/'/'\\\\''/g")"
+}
+
+remote_dirname() {
+  local path="$1"
+  if [[ "$path" == */* ]]; then
+    printf '%s\n' "${path%/*}"
+  else
+    printf '.\n'
+  fi
+}
+
+abs_path() {
+  case "$1" in
+    /*) printf '%s\n' "$1" ;;
+    *)  printf '%s/%s\n' "$PWD" "${1#./}" ;;
+  esac
+}
+
+# ------------------------------------------------------------------ finding adb
+
+adb_candidates() {
+  local c
+  for c in adb adb.exe; do
+    command -v "$c" 2>/dev/null || true
+  done
+  for c in \
+    "${ANDROID_SDK_ROOT:-/nonexistent}/platform-tools/adb" \
+    "${ANDROID_HOME:-/nonexistent}/platform-tools/adb" \
+    "$HOME/Android/Sdk/platform-tools/adb" \
+    /mnt/c/Users/*/AppData/Local/Microsoft/WinGet/Packages/Google.PlatformTools*/platform-tools/adb.exe \
+    /mnt/c/Users/*/AppData/Local/Android/Sdk/platform-tools/adb.exe \
+    /mnt/c/platform-tools/adb.exe \
+    /mnt/c/Android/platform-tools/adb.exe; do
+    if [ -x "$c" ]; then printf '%s\n' "$c"; fi
+  done
+  return 0
+}
+
+adb_serials_of() {
+  "$1" devices 2>/dev/null | tr -d '\r' | awk 'NF == 2 && $2 == "device" { print $1 }'
+}
+
+# Pick the first adb that actually sees a device. Under WSL a Linux adb sees no
+# USB devices while the Windows adb.exe does, so "first on PATH" is not enough.
+# If none sees one, keep the first so the error message can still say why.
+find_adb() {
+  [ -z "$ADB_BIN" ] || return 0
+  if [ -n "${NANO_ADB:-}" ]; then
+    command -v "$NANO_ADB" >/dev/null 2>&1 || die "NANO_ADB='$NANO_ADB' is not an executable"
+    ADB_BIN="$NANO_ADB"
+    return 0
+  fi
+  local cand serials first=""
+  while IFS= read -r cand; do
+    [ -n "$cand" ] || continue
+    [ -n "$first" ] || first="$cand"
+    serials="$(adb_serials_of "$cand" || true)"
+    if [ -n "$serials" ] && { [ -z "$ADB_SERIAL" ] || grep -qxF "$ADB_SERIAL" <<<"$serials"; }; then
+      ADB_BIN="$cand"
+      return 0
+    fi
+  done < <(adb_candidates)
+  ADB_BIN="$first"
+  [ -n "$ADB_BIN" ]
+}
+
+adbx() {
+  if [ -n "$ADB_SERIAL" ]; then
+    "$ADB_BIN" -s "$ADB_SERIAL" "$@"
+  else
+    "$ADB_BIN" "$@"
+  fi
+}
+
+# Resolve adb and the device once per run (pins ADB_SERIAL). Must not be called
+# from a subshell.
+need_device() {
+  [ -z "$READY" ] || return 0
+  find_adb || die "adb not found: install Android platform-tools (e.g. 'winget install Google.PlatformTools') or set NANO_ADB=/path/to/adb"
+  local serials count
+  serials="$(adb_serials_of "$ADB_BIN" || true)"
+  if [ -n "$ADB_SERIAL" ]; then
+    grep -qxF "$ADB_SERIAL" <<<"$serials" \
+      || die "adb device '$ADB_SERIAL' not found (attached: ${serials:-none}); see docs/TROUBLESHOOTING.md"
+  else
+    count=$(( $(awk 'NF' <<<"$serials" | wc -l) ))
+    case "$count" in
+      0) die "no adb device found: plug the Nano in over USB and switch it to ADB mode (docs/FIRMWARE.md, docs/TROUBLESHOOTING.md)" ;;
+      1) ADB_SERIAL="$serials" ;;
+      *) die "several adb devices attached; set NANO_SERIAL to one of: $(tr '\n' ' ' <<<"$serials")" ;;
+    esac
+  fi
+  READY=1
+}
+
+# ------------------------------------------------------------ WSL path handling
+
+# adb.exe is a Windows program: under WSL it needs Windows paths.
+adb_needs_winpath() {
+  [[ "$ADB_BIN" == *.exe ]] && command -v wslpath >/dev/null 2>&1
+}
+
+is_drive_path() {
+  case "$(abs_path "$1")" in
+    /mnt/[a-zA-Z]/*) return 0 ;;
+  esac
+  return 1
+}
+
+# Files inside the WSL filesystem are only reachable from adb.exe as UNC paths,
+# which are slow and flaky, so they are copied through the Windows temp folder.
+adb_needs_staging() {
+  adb_needs_winpath && ! is_drive_path "$1"
+}
+
+adb_local_path() {
+  local p
+  p="$(abs_path "$1")"
+  if adb_needs_winpath; then
+    wslpath -w "$p"
+  else
+    printf '%s\n' "$p"
+  fi
+}
+
+# Windows' cmd.exe (WSL only). It is not on a clean PATH, so also look in the
+# drive mounts.
+find_cmd_exe() {
+  local c
+  c="$(command -v cmd.exe 2>/dev/null || true)"
+  if [ -n "$c" ]; then
+    printf '%s\n' "$c"
+    return 0
+  fi
+  for c in /mnt/[a-zA-Z]/Windows/System32/cmd.exe; do
+    if [ -x "$c" ]; then
+      printf '%s\n' "$c"
+      return 0
+    fi
+  done
+  return 1
+}
+
+init_stage_dir() {
+  [ -z "$STAGE_DIR" ] || return 0
+  local t="" cmd=""
+  cmd="$(find_cmd_exe || true)"
+  if [ -n "$cmd" ]; then
+    # Run from the cmd.exe folder: it is on a drive, so cmd.exe does not
+    # complain about a UNC current directory.
+    t="$(cd "$(dirname "$cmd")" 2>/dev/null && "$cmd" /c 'echo %TEMP%' 2>/dev/null | tr -d '\r' || true)"
+  fi
+  if [ -n "$t" ] && command -v wslpath >/dev/null 2>&1; then
+    STAGE_DIR="$(wslpath -u "$t")/nanoctl-stage"
+  else
+    STAGE_DIR="${TMPDIR:-/tmp}/nanoctl-stage"
+  fi
+}
+
+# Sets STAGE_TMP (not echoed, so the cleanup list survives; no subshell).
+make_stage() {
+  init_stage_dir
+  mkdir -p "$STAGE_DIR"
+  STAGE_TMP="$(mktemp "$STAGE_DIR/xfer.XXXXXX")"
+  STAGED+=("$STAGE_TMP")
+}
+
+# ------------------------------------------------------------- running commands
+
+# Run a shell script on the device and return its exit status. Output is
+# streamed with CRs stripped; stdin is /dev/null (see the header).
+adb_sh() {
+  local script="$1" rcfile rc arc
+  rcfile="$(mktemp)"
+  # The script runs in a subshell so an `exit N` in it ends the subshell, not
+  # the device shell that has to print the status marker afterwards.
+  set +e
+  adbx shell "(
+$script
+)
+printf '\n__NANO_RC=%s\n' \"\$?\"" </dev/null 2>&1 | awk -v rcf="$rcfile" '
+    { gsub(/\r/, "") }
+    /^__NANO_RC=[0-9]+$/ {
+      sub(/^__NANO_RC=/, ""); print > rcf; close(rcf)
+      n = blank - 1; for (i = 0; i < n; i++) print ""
+      blank = 0; next
+    }
+    /^$/ { blank++; next }
+    { for (i = 0; i < blank; i++) print ""; blank = 0; print; fflush() }
+    END { for (i = 0; i < blank; i++) print "" }'
+  arc=${PIPESTATUS[0]}
+  set -e
+  rc="$(cat "$rcfile")"
+  rm -f "$rcfile"
+  # No marker = the shell died under us (reboot, unplug): fall back to adb's status.
+  if [ -n "$rc" ]; then
+    return "$rc"
+  fi
+  return "$arc"
+}
+
+remote_sh() {
+  need_device
+  adb_sh "$1"
+}
+
+# ------------------------------------------------------------------- transfers
+
+push_file() {
+  local src="$1" dst="$2" mode="${3:-}" text="${4:-0}" use tmp=""
+  [ -f "$src" ] || die "missing local file: $src"
+  need_device
+  use="$src"
+  if [ "$text" = "1" ]; then
+    # The CR-stripped copy is staged, which also puts it where adb.exe can read it.
+    make_stage; tmp="$STAGE_TMP"
+    tr -d '\r' < "$src" > "$tmp"
+    use="$tmp"
+  elif adb_needs_staging "$src"; then
+    make_stage; tmp="$STAGE_TMP"
+    cp "$src" "$tmp"
+    use="$tmp"
+  fi
+
+  adb_sh "mkdir -p $(shell_quote "$(remote_dirname "$dst")")" \
+    || die "cannot create remote directory for $dst"
+  adbx push "$(adb_local_path "$use")" "$dst" >&2 || die "adb push failed: $src -> $dst"
+  [ -z "$tmp" ] || rm -f "$tmp"
+  if [ -n "$mode" ]; then
+    # /mnt is vfat and ignores modes, so a failing chmod is not an error.
+    adb_sh "chmod $mode $(shell_quote "$dst") 2>/dev/null || true"
+  fi
+  warn "pushed $src -> adb:$ADB_SERIAL:$dst"
+}
+
+pull_file() {
+  local remote="$1" dest="$2" target tmp=""
+  need_device
+  mkdir -p "$(dirname "$dest")"
+  target="$dest"
+  if adb_needs_staging "$dest"; then
+    make_stage; tmp="$STAGE_TMP"
+    target="$tmp"
+  fi
+  adbx pull "$remote" "$(adb_local_path "$target")" >&2 || die "adb pull failed: $remote"
+  if [ -n "$tmp" ]; then
+    mv -f "$tmp" "$dest"
+  fi
+  warn "pulled adb:$ADB_SERIAL:$remote -> $dest"
+}
+
+# ----------------------------------------------------------------------- status
+
+show_status() {
+  need_device
+  printf 'device:    %s\n' "$ADB_SERIAL"
+  remote_sh 'echo "host:      $(hostname)  kernel $(uname -r)"
+if [ -d /sys/kernel/config/usb_gadget/FunKey/functions/ffs.adb ]; then mode=adb; else mode=storage; fi
+echo "usb mode:  $mode (now)"
+if [ -e /mnt/adb ]; then echo "next boot: adb (/mnt/adb present)"; else echo "next boot: storage (no /mnt/adb)"; fi
+echo "battery:   $(cat /sys/class/power_supply/*/status 2>/dev/null | head -1) $(cat /sys/class/power_supply/*/capacity 2>/dev/null | head -1)%"
+echo "memory:    $(awk "/MemAvailable/ {print int(\$2/1024)}" /proc/meminfo) MB available"
+echo "/mnt:      $(df -h /mnt | awk "NR==2 {print \$4\" free of \"\$2}")"'
+}
+
+# ------------------------------------------------------------ screen and dev loop
+
+# Save a screenshot of the Nano's screen and print the saved path. fbgrab reads
+# /dev/fb0, so this is what the app drew, not the physical backlight state.
+take_shot() {
+  local out="${1:-}" remote n=1
+  if [ -z "$out" ]; then
+    mkdir -p "$SHOT_DIR"
+    out="$SHOT_DIR/shot_$(date +%Y%m%d_%H%M%S).png"
+    while [ -e "$out" ]; do
+      out="$SHOT_DIR/shot_$(date +%Y%m%d_%H%M%S)_$n.png"
+      n=$((n + 1))
+    done
+  fi
+  remote="/tmp/nano_shot_$$_$RANDOM.png"
+  remote_sh "fbgrab $remote >/dev/null 2>&1 && test -s $remote" \
+    || die "screenshot failed (is fbgrab installed on the device?)"
+  pull_file "$remote" "$out"
+  remote_sh "rm -f $remote" >/dev/null || true
+  printf '%s\n' "$out"
+}
+
+# Restart the menu. The frontend supervisor relaunches it, which redraws the
+# screen and drops stale button presses. -CONT first: a paused process would
+# not act on TERM, so this also frees a menu left paused by an aborted `dev`.
+restart_menu() {
+  remote_sh 'n=0
+for f in gmenu2x retrofe; do
+  if pkill -CONT "$f" 2>/dev/null; then n=1; fi
+  pkill -TERM "$f" 2>/dev/null
+done
+if [ "$n" = 1 ]; then
+  echo "menu restarted"
+else
+  echo "no menu process was running; the supervisor should start one, otherwise reboot" >&2
+  exit 1
+fi'
+}
+
+# Runs on the device (sent as text, so no helper file is left behind).
+#   nano_dev_main <timeout s, 0 = none> <force 0|1> <menu process names> <cmd...>
+# The menu is paused with SIGSTOP rather than disabled with `frontend set none`:
+# that writes /mnt/disable_frontend to the SD card, so a crash or a flat battery
+# mid-run would leave the Nano booting with no menu. Nothing here persists; a
+# reboot always recovers. On exit (also on HUP/INT/TERM, e.g. the cable pulled)
+# the menu is killed so the supervisor starts a fresh one.
+IFS= read -r -d '' DEV_RUNNER <<'RUNNER' || true
+nano_dev_restore() {
+  [ -z "$ND_DONE" ] || return 0
+  ND_DONE=1
+  [ -z "$ND_APP" ] || kill "$ND_APP" 2>/dev/null
+  [ -z "$ND_WD" ] || kill "$ND_WD" 2>/dev/null
+  umount /opk 2>/dev/null
+  termfix_all >/dev/null 2>&1
+  keymap default >/dev/null 2>&1
+  for n in $ND_STOPPED; do
+    pkill -CONT "$n" 2>/dev/null
+    pkill -TERM "$n" 2>/dev/null
+  done
+}
+nano_dev_main() {
+  PATH=/usr/local/sbin:/usr/local/bin:$PATH
+  export PATH
+  ND_T=$1; ND_FORCE=$2; ND_FRONT=$3
+  shift 3
+  ND_DONE=""; ND_APP=""; ND_WD=""; ND_STOPPED=""
+  for n in $ND_FRONT; do
+    for p in /proc/[0-9]*; do
+      if [ "$(cat "$p/comm" 2>/dev/null)" = "$n" ]; then
+        ND_STOPPED="$ND_STOPPED $n"
+        break
+      fi
+    done
+  done
+  if [ -z "$ND_STOPPED" ] && [ "$ND_FORCE" != 1 ]; then
+    echo "nano_dev: no menu ($ND_FRONT) is running; another app may own the screen. Refusing; use --force to run anyway." >&2
+    return 3
+  fi
+  trap 'nano_dev_restore; exit 129' HUP
+  trap 'nano_dev_restore; exit 130' INT
+  trap 'nano_dev_restore; exit 143' TERM
+  for n in $ND_STOPPED; do pkill -STOP "$n" 2>/dev/null; done
+  rm -f /tmp/nano_dev.timeout
+  "$@" </dev/null &
+  ND_APP=$!
+  if [ "$ND_T" -gt 0 ]; then
+    ( sleep "$ND_T"; : > /tmp/nano_dev.timeout; kill "$ND_APP" 2>/dev/null; sleep 2; kill -9 "$ND_APP" 2>/dev/null ) &
+    ND_WD=$!
+  fi
+  wait "$ND_APP"
+  ND_RC=$?
+  if [ -e /tmp/nano_dev.timeout ]; then
+    echo "nano_dev: killed after the ${ND_T}s timeout" >&2
+    rm -f /tmp/nano_dev.timeout
+  fi
+  nano_dev_restore
+  echo "nano_dev: app exited with status $ND_RC" >&2
+  return "$ND_RC"
+}
+RUNNER
+
+dev_run() {
+  local timeout=0 force=0 shots="" app base dest text=0 word script rc=0 p s
+  local words=() pids=()
+  while [ "$#" -gt 0 ]; do
+    case "$1" in
+      --timeout) [ "$#" -ge 2 ] || die "dev: --timeout needs seconds"; timeout="$2"; shift 2 ;;
+      --shot)    [ "$#" -ge 2 ] || die "dev: --shot needs seconds"; shots="$2"; shift 2 ;;
+      --force)   force=1; shift ;;
+      --)        shift; break ;;
+      -*)        die "dev: unknown option $1" ;;
+      *)         break ;;
+    esac
+  done
+  [ "$#" -ge 1 ] || die "dev needs an app: a local script/binary/.opk or a path on the device"
+  case "$timeout" in ''|*[!0-9]*) die "dev: --timeout must be a whole number of seconds" ;; esac
+  for s in ${shots//,/ }; do
+    case "$s" in ''|*[!0-9]*) die "dev: --shot takes whole seconds, e.g. --shot 3,8" ;; esac
+  done
+  app="$1"
+  shift
+
+  need_device
+  if [ -f "$app" ]; then
+    base="$(basename "$app")"
+    dest="$DEV_DIR/$base"
+    # Scripts edited on Windows have CRLF, which breaks the #! line: strip it.
+    if [ "$(head -c 2 "$app")" = '#!' ]; then text=1; fi
+    push_file "$app" "$dest" "" "$text"
+    remote_sh "chmod +x $(shell_quote "$dest")" >/dev/null || die "dev: cannot make $dest executable"
+    case "$base" in
+      *.opk|*.OPK) words=(opkrun "$dest") ;;
+      *)           words=("$dest") ;;
+    esac
+  else
+    words=("$app")
+  fi
+  words+=("$@")
+
+  script="$DEV_RUNNER
+nano_dev_main $timeout $force $(shell_quote "${NANO_DEV_FRONTENDS:-gmenu2x retrofe}")"
+  for word in "${words[@]}"; do
+    script="$script $(shell_quote "$word")"
+  done
+
+  # Screenshots are taken from here while the app runs; pending ones are
+  # dropped once it exits (they would only show the menu).
+  for s in ${shots//,/ }; do
+    ( sleep "$s"; take_shot ) &
+    pids+=($!)
+  done
+  remote_sh "$script" || rc=$?
+  for p in ${pids[@]+"${pids[@]}"}; do
+    kill "$p" 2>/dev/null || true
+  done
+  wait 2>/dev/null || true
+  return "$rc"
+}
+
+# --------------------------------------------------------------------- dispatch
+
+case "${1:-}" in
+  status)
+    show_status
+    ;;
+  shell)
+    need_device
+    exec "$ADB_BIN" -s "$ADB_SERIAL" shell
+    ;;
+  run)
+    shift || true
+    [ "$#" -gt 0 ] || die "run needs a remote command"
+    remote_sh "$*"
+    ;;
+  push)
+    shift || true
+    [ "$#" -ge 2 ] || die "push needs <local> <remote> [mode]"
+    push_file "$1" "$2" "${3:-}" 0
+    ;;
+  push-text)
+    shift || true
+    [ "$#" -ge 2 ] || die "push-text needs <local> <remote> [mode]"
+    push_file "$1" "$2" "${3:-}" 1
+    ;;
+  pull)
+    shift || true
+    [ "$#" -eq 2 ] || die "pull needs <remote> <local>"
+    pull_file "$1" "$2"
+    ;;
+  shot)
+    shift || true
+    take_shot "${1:-}"
+    ;;
+  dev)
+    shift || true
+    rc=0
+    dev_run "$@" || rc=$?
+    exit "$rc"
+    ;;
+  restart-menu)
+    restart_menu
+    ;;
+  -V|--version|version)
+    echo "nanoctl $NANOCTL_VERSION"
+    ;;
+  -h|--help|help|"")
+    usage
+    ;;
+  *)
+    usage >&2
+    exit 2
+    ;;
+esac

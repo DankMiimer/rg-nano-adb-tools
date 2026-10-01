@@ -1,0 +1,10 @@
+# These are shell/Python scripts that run on Linux (and some on the Nano's busybox
+# sh). CRLF line endings break the "#!" line, so never convert them on Windows.
+* text=auto eol=lf
+nanoctl           text eol=lf
+*.sh              text eol=lf
+*.py              text eol=lf
+*.md              text eol=lf
+
+*.png             binary
+*.opk             binary
