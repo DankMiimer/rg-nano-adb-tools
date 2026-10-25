@@ -4,7 +4,8 @@ shots/
 # staging area for adb.exe (only used if you point NANO_STAGE_DIR into the repo)
 .nano_stage/
 
-# OPKs built by usbmode/build_usbmode_opk.sh (build output, not source)
+# OPKs built by usbmode/build_usbmode_opk.sh and usblink/build_usblink_opk.sh
+# (build output, not source)
 *.opk
 
 # editors / OS / Python

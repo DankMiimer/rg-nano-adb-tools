@@ -13,6 +13,27 @@ USB device ID tells you:
 
 Remember the mode is read only at boot: **replugging does not switch it.**
 
+## ADB was working, then I unplugged and replugged the cable
+
+The Nano's USB doesn't come back by itself after an unplug; that is the firmware,
+not your PC. Open **USB Link** on the Nano
+([../usblink/README.md](../usblink/README.md)), or reboot it.
+
+## Nothing happens with a USB-C to USB-C cable
+
+The Nano gets no power over a USB-C to USB-C cable (no charging, no connection).
+Use a USB-A to USB-C cable, or a USB-C to USB-A adapter on the host.
+
+## USB Link says "NO HOST FOUND"
+
+Read `/mnt/FunKey/usblink.log`. Each run logs the USB power, its voltage and the
+connection state every second while it waits:
+
+| Log shows | Meaning |
+|---|---|
+| `usb power 0` | no power from the host: USB-C to USB-C cable, or a charge-only cable |
+| `usb power 1`, state stays `not attached` | the host powers the Nano but never talks to it; try another cable, port or host |
+
 If you never get ADB after a reboot, your firmware may not support it:
 [FIRMWARE.md](FIRMWARE.md).
 
@@ -21,7 +42,8 @@ If you never get ADB after a reboot, your firmware may not support it:
 Windows normally installs the "ADB Interface" driver by itself. If it didn't,
 install the Google USB Driver or a "Universal ADB driver", then
 `adb kill-server && adb devices`. The serial port (`COMn`) that appears next to it
-is the Nano's ACM function; `nanoctl` doesn't use it.
+is the Nano's ACM function; `nanoctl` doesn't use it. After **USB Link** with a
+network link there is a network adapter in its place.
 
 ## Under WSL: "no adb device found" although Windows sees the Nano
 
