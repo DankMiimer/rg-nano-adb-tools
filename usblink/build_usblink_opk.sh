@@ -29,7 +29,7 @@ cat > "$STAGE/usblink.funkey-s.desktop" <<EOF
 [Desktop Entry]
 Type=Application
 Name=USB Link
-Comment=Reconnect USB (ADB + network) without a reboot
+Comment=Reconnect USB without a reboot
 Exec=usblink.sh
 Icon=usblink
 Terminal=false
