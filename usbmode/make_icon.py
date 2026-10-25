@@ -1,9 +1,10 @@
 #!/usr/bin/env python3
-"""Draw the 32x32 pixel-art icons for the USB Mode OPKs (no PIL needed).
+"""Draw the 32x32 pixel-art icons for the USB Mode and USB Link OPKs (no PIL needed).
 
     make_icon.py usb out.png            USB trident  (entry "Switch to USB")
     make_icon.py adb out.png            ">_ ADB"     (entry "Switch to ADB")
-    make_icon.py <usb|adb> out.png --preview   also write out_x8.png (8x nearest)
+    make_icon.py link out.png           two handhelds and a cable (entry "USB Link")
+    make_icon.py <usb|adb|link> out.png --preview   also write out_x8.png (8x nearest)
 """
 import struct
 import sys
@@ -86,7 +87,16 @@ def draw_adb(c):
     c.text("ADB", 5, 17, 2, INK)                  # 22px wide, centred
 
 
-ICONS = {"usb": draw_usb, "adb": draw_adb}
+def draw_link(c):
+    """Two handhelds joined by a cable."""
+    for x0 in (3, 19):                            # bodies, 10px wide
+        c.rect(x0, 7, x0 + 9, 24, INK)
+        c.rect(x0 + 2, 9, x0 + 7, 15, BG)         # screen
+        c.disc(x0 + 4.5, 20, 1.6, BG)             # d-pad
+    c.rect(13, 19, 18, 20, INK)                   # cable between them
+
+
+ICONS = {"usb": draw_usb, "adb": draw_adb, "link": draw_link}
 
 
 def png_bytes(pixels, scale=1):

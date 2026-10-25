@@ -25,7 +25,14 @@ by hand in Device Manager). `adb` wins if both are present. In ADB mode the Nano
 On the Nano, `/usr/local/sbin/adb start|stop` and `/usr/bin/adbd` do the work.
 
 Because the markers are read only at boot, **replugging the cable changes
-nothing; the Nano must reboot.**
+nothing; the Nano must reboot.** Worse, after an unplug the USB connection doesn't
+come back at all until a reboot, even in the same mode: only a host that was
+plugged in when the gadget was set up gets a working connection. The **USB Link**
+app ([../usblink/README.md](../usblink/README.md)) rebuilds the gadget without a
+reboot.
+
+Use a **USB-A to USB-C** cable (or a USB-C to USB-A adapter on the host): over a
+USB-C to USB-C cable the Nano gets no power from the host at all.
 
 ## Where this comes from
 

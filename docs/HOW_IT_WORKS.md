@@ -79,3 +79,43 @@ See [../usbmode/README.md](../usbmode/README.md). Two points worth knowing:
   mode again in a loop. That is inferred from the script, not tested (testing it
   risks exactly that boot loop). The stock Reboot entry is just `reboot`, and so
   is this; it also deletes `/mnt/last_opk` first.
+
+## USB Link: rebuild the gadget, don't edit it
+
+See [../usblink/README.md](../usblink/README.md). What it is built on, all seen on
+a real Nano:
+
+- **USB only works with a host that was there when the gadget was bound.** After
+  an unplug the stock ADB gadget never comes back: on a replug the PC gets one
+  `high-speed config` message in the Nano's `dmesg`, then the UDC state
+  (`/sys/class/udc/musb-hdrc.1.auto/state`) drops to `not attached` and stays
+  there, with USB power present. Other hosts see a full-speed device that doesn't
+  answer ("unable to enumerate"). Only a reboot, or a rebuild, recovers it.
+- **A full rebuild while the cable is in works.** Unbind, stop `adbd`, unmount the
+  function filesystem, remove the gadget; then create it again, mount FunctionFS,
+  start `adbd`, wait until it has written its descriptors (`ep1` appears), bind.
+  That is the boot sequence of `/usr/local/sbin/adb`. The PC configures the gadget
+  within about a second.
+- **Editing the gadget under a running `adbd` does not.** Unbind, add a function,
+  rebind: the bind succeeds, but no host ever sees the device again until a reboot.
+- **The musb controller has 4 data endpoints each way.** Serial (ACM: interrupt IN
+  + bulk IN/OUT) + ADB (bulk IN/OUT) + a network function (interrupt IN + bulk
+  IN/OUT) needs 5 IN, and the bind fails with "No such device". So the network
+  function replaces ACM. It is linked first, so it takes interfaces 0-1 like ACM
+  did and ADB stays interface 2, which is what the PC's ADB driver was installed
+  for (`VID_8087&PID_011E&MI_02`).
+- **Windows can't use NCM with this kernel (4.14).** The UsbNcm driver binds and
+  the adapter comes up, but `f_ncm` rejects every packet with "Wrong NDP SIGN".
+  RNDIS works: with Microsoft OS descriptors (`os_desc`, compatible ID `RNDIS`,
+  sub-ID `5162001`, as `usb_gadget` sets for its own `usbnet` mode) Windows loads
+  "Remote NDIS Compatible Device" by itself. Windows only reads OS descriptors the
+  first time it sees a USB ID + device version, and it has seen `8087:011e` version
+  `0x0414` (the kernel's default) without them, so RNDIS mode reports `0x0415`.
+- **USB-C to USB-C cables power nothing.** The Nano's port evidently lacks the CC
+  pull-down resistors that tell a USB-C host a device is there, so neither a PC nor
+  another handheld switches its 5 V on (`axp20x-usb/online` stays 0). USB-A to
+  USB-C cables don't need them.
+- **SSH without touching the read-only root.** `dropbear` only reads
+  `~/.ssh/authorized_keys`, and `/root` is on the read-only partition. USB Link
+  mounts a small tmpfs over `/root` holding a copy of what was there (`.profile`,
+  the `.gmenu2x` link) plus the key from `/mnt/USB-link/`. It is gone at reboot.

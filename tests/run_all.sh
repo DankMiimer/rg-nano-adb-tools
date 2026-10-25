@@ -16,7 +16,7 @@ EOF
 fi
 
 failed=0
-for t in test_nanoctl.sh test_usbmode.sh test_dev.sh; do
+for t in test_nanoctl.sh test_usbmode.sh test_usblink.sh test_dev.sh; do
   echo
   echo "################ $t"
   bash "./$t" || failed=$((failed + 1))
