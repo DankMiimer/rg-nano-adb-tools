@@ -1,8 +1,9 @@
 # rg-nano-adb-tools
 
 Develop on an **Anbernic RG Nano** over one USB cable: a real shell, file
-transfer, screenshots, a safe "run my app and give me the menu back" loop, and
-an on-device shortcut that flips the Nano between ADB and USB-storage mode.
+transfer, screenshots, a safe "run my app and give me the menu back" loop, an
+on-device shortcut that flips the Nano between ADB and USB-storage mode, and one
+that brings USB back after a replug without a reboot.
 
 The RG Nano has a single USB-C port. A WiFi dongle needs that port, so you can't
 charge while using it. Over ADB the cable gives you control **and** power.
@@ -30,8 +31,8 @@ whether yours does (it takes one reboot to try).
 Host:
 
 - `bash` 4+, `awk`, `sed`, `tr`, `grep` and Android platform-tools (`adb`)
-- optional: `squashfs-tools` and `python3` to build the USB Mode shortcut,
-  `python3` for the tests
+- optional: `squashfs-tools` and `python3` to build the USB Mode and USB Link
+  OPKs, `python3` for the tests
 
 Tested on: an RG Nano running [DrUm78's FunKey-OS fork](https://github.com/DrUm78/FunKey-OS)
 (the device reports `FunKey-OS 2.3.0`; kernel `4.14.14-funkey`, built 2026-01-18),
@@ -107,11 +108,29 @@ visible at a time, and its name and icon say what pressing it will do:
 You need it because the PC can't change the mode once the Nano is in storage
 mode (there is no shell then). More in [usbmode/README.md](usbmode/README.md).
 
+### USB Link
+
+After an unplug, the Nano's USB doesn't come back until a reboot, whatever the
+mode. `usblink/` builds a **USB Link** OPK for the **Applications** menu: plug the
+cable back in, open it, and ADB is back within a few seconds, no reboot.
+
+```bash
+usblink/build_usblink_opk.sh --refresh
+```
+
+It can also put a network link on the same cable instead of the serial port, set
+in `USB-link/usblink.conf` on the card: `NETWORK=rndis` for Windows (no PC setup
+needed: `ssh root@169.254.170.5`) or `NETWORK=ncm` for Linux hosts, with optional
+key-only SSH. More in [usblink/README.md](usblink/README.md).
+
 ## Limits and known issues
 
 - ADB mode **hides the mass-storage drive**: use `push`/`pull` instead. The card
   can't be shared with the PC while the Nano is using it.
 - The mode is read **only at boot**, so every switch is a reboot.
+- After an **unplug**, USB is gone until a reboot; open **USB Link** to bring it
+  back instead.
+- Use a **USB-A to USB-C** cable: over USB-C to USB-C the Nano gets no power.
 - `run` cannot read stdin, and nothing can be piped into `adb shell` on this
   firmware (the shell never sees end-of-input). Use `push`.
 - `dev` kills your app's main process, not children it spawned.
