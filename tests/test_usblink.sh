@@ -30,6 +30,7 @@ P="$(plan)"
 check "gadget" acm "$(field gadget "$P")"
 check "address" none "$(field address "$P")"
 check "no SSH without a network link" 0 "$(field ssh "$P")"
+check "watch mode on by default" 1 "$(field watch "$P")"
 
 echo "== C. NETWORK=ncm: default address 10.170.0.5/24, SSH only with authorized_keys =="
 settings 'NETWORK=ncm\n'
@@ -59,6 +60,33 @@ check "ssh off" 0 "$(field ssh "$P")"
 settings 'NETWORK=yes\n'
 check "NETWORK=yes falls back to the stock gadget" acm "$(field gadget "$(plan)")"
 has "and says so in the log" "unknown NETWORK=yes" "$("$R" run 'cat /tmp/ul_log')"
+settings 'WATCH=no\n'
+check "WATCH=no turns watch mode off" 0 "$(field watch "$(plan)")"
+
+echo "== W. the watcher, on fake status files (dry run: it logs rebuilds instead of doing them) =="
+# Fake gadget, UDC state and USB power; 0.2 s ticks and 2 ticks of settling.
+W=/tmp/ulw
+WENV="USBLINK_DRYRUN=1 USBLINK_QUIET=1 USBLINK_TICK=0.2 USBLINK_SETTLE=2 USBLINK_GADGET=$W/g USBLINK_UDC_CLASS=$W/udc USBLINK_POWER=$W/pw USBLINK_RUN=$W/run USBLINK_DIR=$D USBLINK_LOG=$W/log"
+"$R" run "rm -rf $W $D; mkdir -p $W/g/functions/ffs.adb $W/udc/fake.udc $W/pw $W/run $D; echo 'not attached' > $W/udc/fake.udc/state; echo 0 > $W/pw/online"
+"$R" run "$WENV setsid sh /tmp/usblink_test.sh --watch </dev/null >/dev/null 2>&1 & sleep 1"
+power() { "$R" run "echo $1 > $W/pw/online"; }
+udc() { "$R" run "echo '$1' > $W/udc/fake.udc/state"; }
+rebuilds() { "$R" run "grep -c 'nothing rebuilt' $W/log"; }
+check "watcher is running" alive "$("$R" run "kill -0 \$(cat $W/run/usblink-watch.pid) 2>/dev/null && echo alive || echo dead")"
+has "starting unplugged is noticed" "watch: unplugged" "$("$R" run "cat $W/log")"
+power 1; sleep 2
+check "plugged in, no host: one rebuild" 1 "$(rebuilds)"
+sleep 2
+check "still plugged in: no second rebuild (a charger can't make it loop)" 1 "$(rebuilds)"
+power 0; sleep 1; power 1; sleep 2
+check "replugged, no host: rebuilds again" 2 "$(rebuilds)"
+power 0; sleep 1; udc configured; power 1; sleep 2
+check "replugged and the host connects by itself: left alone" 2 "$(rebuilds)"
+power 0; sleep 1; udc suspended; power 1; sleep 2
+check "replugged, host has suspended it: left alone" 2 "$(rebuilds)"
+"$R" run "kill \$(cat $W/run/usblink-watch.pid)"; sleep 1
+check "watcher stops when killed" dead "$("$R" run "kill -0 \$(cat $W/run/usblink-watch.pid) 2>/dev/null && echo alive || echo dead")"
+"$R" run "rm -rf $W"
 
 echo "== F. MAC addresses: fixed, locally administered, same suffix =="
 P="$(plan)"
