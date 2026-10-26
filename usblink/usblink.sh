@@ -26,10 +26,11 @@
 # Watch mode (WATCH=yes, the default): after a run, a watcher stays in the
 # background until the next reboot. When USB power is present but no host has
 # configured the gadget after a few seconds, it rebuilds the gadget, so a replug
-# reconnects by itself. Once per plug-in: a charger, which powers the Nano but
-# never configures it, gets one rebuild and no more. It never touches a
-# configured (or suspended) gadget, so it can't interrupt a working connection.
-# It runs from a
+# reconnects by itself, and so does a host that drops a working connection while
+# the port stays powered. One rebuild per plug-in or lost connection: a charger,
+# which powers the Nano but never configures it, gets one and no more. It never
+# touches a configured (or suspended) gadget, so it can't interrupt a working
+# connection. It runs from a
 # copy in /tmp, because the menu unmounts the OPK when the app exits, and reads
 # its two status files with the shell's own `read`, so it costs next to nothing.
 #
@@ -280,40 +281,55 @@ no_host() {
 }
 
 # watch: the background loop of watch mode
+# A rebuild disarms it; an unplug (USB power gone) or a host configuring the
+# gadget (a working connection) arms it again. So a replug, or a host dropping a
+# working connection while the port stays powered (a PC rebooting with the cable
+# in, a host resetting its port), gets one rebuild, and a charger, which powers
+# the Nano but never configures it, gets one per plug-in and no more.
 watch() {
     echo $$ > "$WATCH_PID"
     log "watch: started"
-    tried=1   # the run that started this one has just rebuilt
+    armed=0   # the run that started this one has just rebuilt
+    prev_o=""
+    prev_st=""
     while :; do
         o=0; read -r o < "$POWER/online" 2>/dev/null
         st=""; read -r st < "$UDCS/$UDC/state" 2>/dev/null
-        if [ "$o" = 1 ]; then
-            if no_host "$st" && [ "$tried" = 0 ]; then
-                tried=1
-                # give a host the chance to configure it the normal way first
-                n=0
-                while [ $n -lt "$SETTLE" ] && no_host "$st"; do
-                    sleep "$TICK"
-                    read -r st < "$UDCS/$UDC/state" 2>/dev/null
-                    n=$((n + 1))
-                done
-                read -r o < "$POWER/online" 2>/dev/null
-                if [ "$o" = 1 ] && no_host "$st"; then
-                    log "watch: USB power but no host (state $st), rebuilding"
-                    if [ -n "$USBLINK_DRYRUN" ]; then
-                        log "watch: dry run, nothing rebuilt"
-                    else
-                        rebuild
-                        wait_host 15
-                        link_up
-                        log "watch: done, state $(state)"
-                    fi
+        if [ "$o" != 1 ]; then
+            [ "$prev_o" != 0 ] && log "watch: unplugged"
+            armed=1
+        elif [ "$st" = configured ]; then
+            armed=1
+        elif no_host "$st" && [ "$armed" = 1 ]; then
+            armed=0
+            if [ "$prev_st" = configured ]; then
+                why="host dropped the connection"
+            else
+                why="USB power but no host"
+            fi
+            # give a host the chance to configure it the normal way first
+            n=0
+            while [ $n -lt "$SETTLE" ] && no_host "$st"; do
+                sleep "$TICK"
+                read -r st < "$UDCS/$UDC/state" 2>/dev/null
+                n=$((n + 1))
+            done
+            read -r o < "$POWER/online" 2>/dev/null
+            if [ "$o" = 1 ] && no_host "$st"; then
+                log "watch: $why (state $st), rebuilding"
+                if [ -n "$USBLINK_DRYRUN" ]; then
+                    log "watch: dry run, nothing rebuilt"
+                else
+                    rebuild
+                    wait_host 15
+                    link_up
+                    st="$(state)"
+                    log "watch: done, state $st"
                 fi
             fi
-        elif [ "$tried" = 1 ]; then
-            log "watch: unplugged"
-            tried=0
         fi
+        prev_o="$o"
+        prev_st="$st"
         sleep "$TICK"
     done
 }

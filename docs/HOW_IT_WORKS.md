@@ -120,9 +120,12 @@ a real Nano:
   thing run from the card at boot is Instant Play's one-shot resume command), so
   the watcher starts when USB Link is opened and lives until reboot. It treats
   `not attached` and `powered` with USB power present as "no host" and rebuilds
-  after a 6 s settle, at most once per plug-in (a charger never configures the
-  gadget, so this stops a rebuild loop). `configured` and `suspended` are left
-  alone. It runs from a copy in `/tmp` because `opkrun` unmounts `/opk` when the
+  after a 6 s settle. A rebuild disarms it; losing USB power (an unplug) or the
+  gadget reaching `configured` (a working connection) arms it again. So a replug,
+  and a host that drops a working connection while its port stays powered (seen:
+  a host-side disconnect leaves the gadget in `not attached` for good), each get
+  one rebuild, and a charger, which never configures the gadget, can't cause a
+  rebuild loop. `configured` and `suspended` are left alone. It runs from a copy in `/tmp` because `opkrun` unmounts `/opk` when the
   app exits, and it polls with `read` (a shell builtin), so it forks nothing
   while idle. `tests/test_usblink.sh` runs it on fake status files.
 - **A network gadget that won't bind falls back to the stock one.** Otherwise a
