@@ -115,6 +115,18 @@ a real Nano:
   pull-down resistors that tell a USB-C host a device is there, so neither a PC nor
   another handheld switches its 5 V on (`axp20x-usb/online` stays 0). USB-A to
   USB-C cables don't need them.
+- **Auto-reconnect is a watcher, not a boot hook.** Stock firmware has no place to
+  start a user script at boot (`rc.local` is on the read-only partition; the only
+  thing run from the card at boot is Instant Play's one-shot resume command), so
+  the watcher starts when USB Link is opened and lives until reboot. It treats
+  `not attached` and `powered` with USB power present as "no host" and rebuilds
+  after a 6 s settle, at most once per plug-in (a charger never configures the
+  gadget, so this stops a rebuild loop). `configured` and `suspended` are left
+  alone. It runs from a copy in `/tmp` because `opkrun` unmounts `/opk` when the
+  app exits, and it polls with `read` (a shell builtin), so it forks nothing
+  while idle. `tests/test_usblink.sh` runs it on fake status files.
+- **A network gadget that won't bind falls back to the stock one.** Otherwise a
+  failed bind would leave USB dead until a reboot.
 - **SSH without touching the read-only root.** `dropbear` only reads
   `~/.ssh/authorized_keys`, and `/root` is on the read-only partition. USB Link
   mounts a small tmpfs over `/root` holding a copy of what was there (`.profile`,

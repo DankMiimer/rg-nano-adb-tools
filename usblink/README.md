@@ -1,12 +1,14 @@
 # USB Link
 
 One OPK for the Nano's **Applications** menu that brings its USB connection back
-**without a reboot**, and can add a **network link** over the same cable.
+**without a reboot**, keeps doing so after every replug, and can add a **network
+link** over the same cable.
 
 The Nano only talks to a USB host that was plugged in when its USB was set up at
 boot. Unplug the cable and plug it back in, and ADB is gone until you reboot (see
-[../docs/FIRMWARE.md](../docs/FIRMWARE.md)). Open **USB Link** after plugging in
-and it comes back in a few seconds.
+[../docs/FIRMWARE.md](../docs/FIRMWARE.md)). Open **USB Link** once and it comes
+back in a few seconds; after that, every replug reconnects by itself until the
+next reboot.
 
 It works with the stock firmware: no custom build, nothing changed on the system
 partition. It only works in **ADB mode** (see [../usbmode/README.md](../usbmode/README.md)).
@@ -37,8 +39,26 @@ Or copy `USBLink.opk` into the `Applications` folder of the Nano's drive yoursel
 2. Open **Applications → USB Link**. It shows "RECONNECTING USB...", then
    "CONNECTED" (or "NO HOST FOUND") and returns to the menu after a few seconds.
 
-ADB drops for a few seconds while it rebuilds. What it sets up lasts until the
-Nano reboots (or until you unplug again: then open it again).
+ADB drops for a few seconds while it rebuilds. The notice also says
+"AUTO-RECONNECT ON": from now until the Nano reboots, unplug and plug in again
+(to the same host or another) and the connection comes back by itself, about
+6-10 seconds after plugging in. No need to open USB Link again.
+
+### Auto-reconnect (watch mode)
+
+After a run, a small watcher stays in the background until the next reboot. When
+the Nano has USB power but no host has connected after about 6 seconds, it
+rebuilds the USB connection, the same way the app does.
+
+- **Once per plug-in.** A charger powers the Nano but never connects to it: it
+  gets one rebuild and no more, until you unplug.
+- **It never touches a working connection** (a host that has configured the
+  Nano, or put it to sleep), so it can't cut ADB while you use it.
+- **It costs next to nothing:** it checks two status files once a second with the
+  shell's own `read`, no extra programs.
+- It runs from a copy in `/tmp`, since the menu unmounts the OPK when the app
+  exits. Opening USB Link again replaces it; a reboot ends it. `WATCH=no` in the
+  settings turns it off (open USB Link once to apply that).
 
 ## The network link (optional)
 
@@ -52,6 +72,7 @@ the Nano), one `KEY=value` per line:
 | `NETWORK` | `no`: just ADB + the serial port (the stock setup)<br>`rndis`: for Windows PCs<br>`ncm`: for Linux hosts (other handhelds, Linux PCs) | `no` |
 | `ADDRESS` | the Nano's address on the link, `a.b.c.d/prefix` | `169.254.170.5/16` for `rndis`, `10.170.0.5/24` for `ncm` |
 | `SSH` | `auto`: start SSH if `authorized_keys` is there; `no`: never | `auto` |
+| `WATCH` | `yes`: reconnect by itself after replugs (see above); `no`: only when you open it | `yes` |
 
 Why two kinds:
 
@@ -89,9 +110,11 @@ single CPU core is busy with the encryption.
 3. builds it again the way the firmware does at boot (`/usr/local/sbin/adb`): same
    USB ID and names, a fresh function filesystem, `adbd` started and ready, then
    the gadget is switched on. With a network link, the network function takes the
-   serial port's place;
+   serial port's place. **If the network version won't start, it builds the stock
+   ADB + serial one instead**, so USB is never left dead (the notice then says
+   "ADB ONLY: NETWORK FAILED");
 4. waits up to 15 s for the host, then sets the address and starts SSH if asked;
-5. shows the result.
+5. starts the auto-reconnect watcher (unless `WATCH=no`) and shows the result.
 
 Each run is logged to `/mnt/FunKey/usblink.log`, including the USB power, its
 voltage and the connection state second by second while it waits. When a host
@@ -106,12 +129,16 @@ doesn't connect, that log is the first thing to read.
   USB-A adapter sees the Nano at full speed only and gets no answer from it, so it
   gives up ("unable to enumerate" in its `dmesg`); the Nano's log shows power but
   no host. A Windows PC with the same cable works every time. Not solved yet.
-- It lasts until the next reboot. A reboot gives back the stock USB setup.
+- It lasts until the next reboot, auto-reconnect included. A reboot gives back the
+  stock USB setup; open USB Link once to get both back.
 
 ## Test hooks
 
 `usblink.sh` honours `USBLINK_GADGET`, `USBLINK_UDC_CLASS`, `USBLINK_DIR`,
-`USBLINK_LOG`, `USBLINK_POWER`, `USBLINK_DRYRUN=1` (print the plan, change nothing)
-and `USBLINK_QUIET=1` (no on-screen notice). `tests/test_usblink.sh` uses them to
-test the decisions without touching the real USB setup (which would cut its own
-`adb` session).
+`USBLINK_LOG`, `USBLINK_POWER`, `USBLINK_RUN` (pid files and the watcher's copy),
+`USBLINK_TICK` and `USBLINK_SETTLE` (the watcher's timing), `USBLINK_DRYRUN=1`
+(print the plan, change nothing; with `--watch`, log rebuilds instead of doing
+them), `USBLINK_QUIET=1` (no on-screen notice) and `USBLINK_FORCE_FAIL=1` (make a
+network gadget fail to bind, to test the fallback). `tests/test_usblink.sh` uses
+them to test the decisions, and the watcher on fake status files, without
+touching the real USB setup (which would cut its own `adb` session).

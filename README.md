@@ -111,8 +111,9 @@ mode (there is no shell then). More in [usbmode/README.md](usbmode/README.md).
 ### USB Link
 
 After an unplug, the Nano's USB doesn't come back until a reboot, whatever the
-mode. `usblink/` builds a **USB Link** OPK for the **Applications** menu: plug the
-cable back in, open it, and ADB is back within a few seconds, no reboot.
+mode. `usblink/` builds a **USB Link** OPK for the **Applications** menu: open it
+once and ADB is back within a few seconds, no reboot. After that every replug
+reconnects by itself until the next reboot.
 
 ```bash
 usblink/build_usblink_opk.sh --refresh

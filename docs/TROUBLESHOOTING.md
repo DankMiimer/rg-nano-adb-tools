@@ -17,7 +17,9 @@ Remember the mode is read only at boot: **replugging does not switch it.**
 
 The Nano's USB doesn't come back by itself after an unplug; that is the firmware,
 not your PC. Open **USB Link** on the Nano
-([../usblink/README.md](../usblink/README.md)), or reboot it.
+([../usblink/README.md](../usblink/README.md)), or reboot it. Once USB Link has
+been opened since the last boot, replugs reconnect by themselves within about
+10 seconds (its auto-reconnect); `/mnt/FunKey/usblink.log` shows each one.
 
 ## Nothing happens with a USB-C to USB-C cable
 
