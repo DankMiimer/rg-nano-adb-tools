@@ -84,6 +84,13 @@ power 0; sleep 1; udc configured; power 1; sleep 2
 check "replugged and the host connects by itself: left alone" 2 "$(rebuilds)"
 power 0; sleep 1; udc suspended; power 1; sleep 2
 check "replugged, host has suspended it: left alone" 2 "$(rebuilds)"
+udc configured; sleep 1; udc 'not attached'; sleep 2
+check "host drops a working connection, power stays on: rebuilds" 3 "$(rebuilds)"
+has "and says why" "host dropped the connection" "$("$R" run "cat $W/log")"
+sleep 2
+check "still no host after that: no second rebuild" 3 "$(rebuilds)"
+udc configured; sleep 1; udc 'not attached'; sleep 2
+check "connects again, then dropped again: one more rebuild" 4 "$(rebuilds)"
 "$R" run "kill \$(cat $W/run/usblink-watch.pid)"; sleep 1
 check "watcher stops when killed" dead "$("$R" run "kill -0 \$(cat $W/run/usblink-watch.pid) 2>/dev/null && echo alive || echo dead")"
 "$R" run "rm -rf $W"

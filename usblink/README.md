@@ -48,10 +48,13 @@ ADB drops for a few seconds while it rebuilds. The notice also says
 
 After a run, a small watcher stays in the background until the next reboot. When
 the Nano has USB power but no host has connected after about 6 seconds, it
-rebuilds the USB connection, the same way the app does.
+rebuilds the USB connection, the same way the app does. That covers a replug, and
+also a host that drops a working connection while its port stays powered: a PC
+rebooting with the cable in, or a host that resets its USB port.
 
-- **Once per plug-in.** A charger powers the Nano but never connects to it: it
-  gets one rebuild and no more, until you unplug.
+- **One rebuild per plug-in or lost connection.** A charger powers the Nano but
+  never connects to it: it gets one rebuild and no more, until you unplug. A
+  connection that comes back by itself within the 6 seconds is left alone.
 - **It never touches a working connection** (a host that has configured the
   Nano, or put it to sleep), so it can't cut ADB while you use it.
 - **It costs next to nothing:** it checks two status files once a second with the
