@@ -1,10 +1,11 @@
 #!/usr/bin/env python3
-"""Draw the 32x32 pixel-art icons for the USB Mode and USB Link OPKs (no PIL needed).
+"""Draw the 32x32 pixel-art icons for the USB Mode, USB Link and Wi-Fi OPKs (no PIL needed).
 
     make_icon.py usb out.png            USB trident  (entry "Switch to USB")
     make_icon.py adb out.png            ">_ ADB"     (entry "Switch to ADB")
     make_icon.py link out.png           two handhelds and a cable (entry "USB Link")
-    make_icon.py <usb|adb|link> out.png --preview   also write out_x8.png (8x nearest)
+    make_icon.py wifi out.png           a dot and three arcs (entry "Wi-Fi")
+    make_icon.py <usb|adb|link|wifi> out.png --preview   also write out_x8.png (8x nearest)
 """
 import struct
 import sys
@@ -96,7 +97,21 @@ def draw_link(c):
     c.rect(13, 19, 18, 20, INK)                   # cable between them
 
 
-ICONS = {"usb": draw_usb, "adb": draw_adb, "link": draw_link}
+def draw_wifi(c):
+    """The Wi-Fi sign: a dot and three arcs in a 90 degree wedge above it."""
+    cx, cy = 15.5, 24.5
+    c.disc(cx, cy, 2.2, INK)
+    for y in range(H):
+        for x in range(W):
+            dx, dy = x - cx, cy - y
+            if dy <= 0 or abs(dx) > dy:
+                continue
+            r = (dx * dx + dy * dy) ** 0.5
+            if any(lo <= r <= lo + 2.2 for lo in (5.5, 10.5, 15.5)):
+                c.put(x, y, INK)
+
+
+ICONS = {"usb": draw_usb, "adb": draw_adb, "link": draw_link, "wifi": draw_wifi}
 
 
 def png_bytes(pixels, scale=1):
