@@ -63,6 +63,94 @@ has "and says so in the log" "unknown NETWORK=yes" "$("$R" run 'cat /tmp/ul_log'
 settings 'WATCH=no\n'
 check "WATCH=no turns watch mode off" 0 "$(field watch "$(plan)")"
 
+echo "== I. internet over the link: ADDRESS=dhcp, or GATEWAY and DNS with a fixed address =="
+P="$(plan)"
+check "no settings: no gateway" none "$(field gateway "$P")"
+settings 'NETWORK=rndis\nADDRESS=dhcp\n'
+P="$(plan)"
+check "dhcp: address" dhcp "$(field address "$P")"
+check "dhcp: gateway from the host" dhcp "$(field gateway "$P")"
+check "dhcp: dns from the host" dhcp "$(field dns "$P")"
+settings 'NETWORK=rndis\nADDRESS=dhcp\nDNS=1.1.1.1\n'
+check "dhcp with DNS: those servers" 1.1.1.1 "$(field dns "$(plan)")"
+settings 'NETWORK=ncm\nADDRESS=10.170.0.5/24\nGATEWAY=10.170.0.1\n'
+P="$(plan)"
+check "gateway" 10.170.0.1 "$(field gateway "$P")"
+check "dns defaults to the gateway" 10.170.0.1 "$(field dns "$P")"
+settings 'NETWORK=ncm\nGATEWAY=10.170.0.1\nDNS=1.1.1.1,9.9.9.9\n'
+check "dns list" 1.1.1.1,9.9.9.9 "$(field dns "$(plan)")"
+settings 'NETWORK=no\nADDRESS=dhcp\nGATEWAY=10.170.0.1\n'
+P="$(plan)"
+check "no network: no address" none "$(field address "$P")"
+check "no network: no gateway" none "$(field gateway "$P")"
+
+echo "== J. link setup (stand-in ip and udhcpc: the real link is not touched) =="
+# Fake ip records its arguments; fake udhcpc plays a DHCP server's answer
+# (from /tmp/ul_lease, KEY=value lines) by running the -s script, as udhcpc does.
+printf '#!/bin/sh\necho "ip $*" >> /tmp/ul_net.log\n' > "$WORK/ip"
+cat > "$WORK/udhcpc" <<'EOF'
+#!/bin/sh
+echo "udhcpc $*" >> /tmp/ul_net.log
+s=""
+while [ $# -gt 0 ]; do [ "$1" = -s ] && s="$2"; shift; done
+[ -s /tmp/ul_lease ] || exit 1
+while IFS='=' read -r k v; do export "$k=$v"; done < /tmp/ul_lease
+"$s" deconfig; "$s" bound
+EOF
+"$R" push-text "$WORK/ip" /tmp/ul_netbin/ip 755 2>/dev/null
+"$R" push-text "$WORK/udhcpc" /tmp/ul_netbin/udhcpc 755 2>/dev/null
+"$R" run "chmod +x /tmp/usblink_test.sh"
+LENV="PATH=/tmp/ul_netbin:\$PATH USBLINK_QUIET=1 USBLINK_DIR=$D USBLINK_LOG=/tmp/ul_log USBLINK_RUN=/tmp/ul_run USBLINK_RESOLV=/tmp/ul_resolv USBLINK_LINKTEST=usbX"
+link() { "$R" run "rm -f /tmp/ul_net.log /tmp/ul_resolv; mkdir -p /tmp/ul_run; $LENV sh /tmp/usblink_test.sh" | sed -n 's/^link: //p'; }
+netlog() { "$R" run 'cat /tmp/ul_net.log 2>/dev/null'; }
+resolv() { "$R" run 'cat /tmp/ul_resolv 2>/dev/null' | tr '\n' ' '; }
+
+settings 'NETWORK=rndis\nADDRESS=dhcp\n'
+"$R" run "printf 'ip=192.168.137.42\nmask=24\nrouter=192.168.137.1\ndns=192.168.137.1\n' > /tmp/ul_lease"
+L="$(link)"
+check "dhcp: address from the lease" 192.168.137.42 "$(field ip "$L")"
+check "dhcp: routed" 1 "$(field routed "$L")"
+N="$(netlog)"
+has "asks on the link interface, with this script as the event handler" "udhcpc -i usbX -s /tmp/usblink_test.sh" "$N"
+has "sets the leased address" "ip addr add 192.168.137.42/24 dev usbX" "$N"
+has "routes via the host" "ip route replace default via 192.168.137.1 dev usbX" "$N"
+check "dns from the lease" "nameserver 192.168.137.1 " "$(resolv)"
+"$R" run "printf 'ip=10.1.1.9\nmask=16\nrouter=10.1.0.1 10.1.0.2\ndns=8.8.8.8 1.1.1.1\n' > /tmp/ul_lease"
+L="$(link)"
+has "first router of several" "ip route replace default via 10.1.0.1 dev usbX" "$(netlog)"
+check "every dns server" "nameserver 8.8.8.8 nameserver 1.1.1.1 " "$(resolv)"
+settings 'NETWORK=rndis\nADDRESS=dhcp\nDNS=1.1.1.1,9.9.9.9\n'
+L="$(link)"
+check "DNS in the settings wins over the lease's" "nameserver 1.1.1.1 nameserver 9.9.9.9 " "$(resolv)"
+has "but the lease's route is used" "ip route replace default via 10.1.0.1 dev usbX" "$(netlog)"
+settings 'NETWORK=rndis\nADDRESS=dhcp\n'
+"$R" run "printf 'ip=10.1.1.9\nmask=24\nrouter=\ndns=\n' > /tmp/ul_lease"
+L="$(link)"
+check "a lease without a router: address only" "10.1.1.9 0" "$(field ip "$L") $(field routed "$L")"
+"$R" run "rm -f /tmp/ul_pwned; printf 'ip=\$(touch /tmp/ul_pwned)\nmask=24\nrouter=1.2.3.4\ndns=1.2.3.4\n' > /tmp/ul_lease"
+L="$(link)"
+check "an unusable lease is not used: default address" 169.254.170.5 "$(field ip "$L")"
+check "and nothing in it runs" absent "$("$R" run '[ -e /tmp/ul_pwned ] && echo present || echo absent')"
+"$R" run "rm -f /tmp/ul_lease"
+L="$(link)"
+check "no DHCP server: default address" 169.254.170.5 "$(field ip "$L")"
+check "no DHCP server: says so" 1 "$(field dhcp_failed "$L")"
+check "no DHCP server: not routed" 0 "$(field routed "$L")"
+has "and logs it" "no answer from the host" "$("$R" run 'cat /tmp/ul_log')"
+settings 'NETWORK=ncm\nGATEWAY=10.170.0.1\nDNS=1.1.1.1,9.9.9.9\n'
+L="$(link)"
+N="$(netlog)"
+has "fixed address" "ip addr add 10.170.0.5/24 dev usbX" "$N"
+has "route via GATEWAY" "ip route replace default via 10.170.0.1 dev usbX" "$N"
+check "DNS servers" "nameserver 1.1.1.1 nameserver 9.9.9.9 " "$(resolv)"
+check "no DHCP asked" "" "$(printf '%s\n' "$N" | grep udhcpc)"
+settings 'NETWORK=ncm\n'
+L="$(link)"
+check "no GATEWAY: not routed" 0 "$(field routed "$L")"
+check "no GATEWAY: no route" "" "$(netlog | grep route)"
+check "no GATEWAY: DNS left alone" "" "$(resolv)"
+"$R" run "rm -rf /tmp/ul_netbin /tmp/ul_net.log /tmp/ul_lease /tmp/ul_resolv /tmp/ul_run /tmp/ul_pwned"
+
 echo "== W. the watcher, on fake status files (dry run: it logs rebuilds instead of doing them) =="
 # Fake gadget, UDC state and USB power; 0.2 s ticks and 2 ticks of settling.
 W=/tmp/ulw

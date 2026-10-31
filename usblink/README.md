@@ -73,7 +73,9 @@ the Nano), one `KEY=value` per line:
 | Setting | Values | Default |
 |---|---|---|
 | `NETWORK` | `no`: just ADB + the serial port (the stock setup)<br>`rndis`: for Windows PCs<br>`ncm`: for Linux hosts (other handhelds, Linux PCs) | `no` |
-| `ADDRESS` | the Nano's address on the link, `a.b.c.d/prefix` | `169.254.170.5/16` for `rndis`, `10.170.0.5/24` for `ncm` |
+| `ADDRESS` | the Nano's address on the link, `a.b.c.d/prefix`, or `dhcp` (see [Internet over the cable](#internet-over-the-cable)) | `169.254.170.5/16` for `rndis`, `10.170.0.5/24` for `ncm` |
+| `GATEWAY` | with a fixed `ADDRESS`: use the internet connection of the host at this address | none |
+| `DNS` | with `GATEWAY` or `ADDRESS=dhcp`: name servers, comma-separated | the `GATEWAY`, or the DHCP server's |
 | `SSH` | `auto`: start SSH if `authorized_keys` is there; `no`: never | `auto` |
 | `WATCH` | `yes`: reconnect by itself after replugs (see above); `no`: only when you open it | `yes` |
 
@@ -92,6 +94,85 @@ Why two kinds:
 In network mode the serial port (`COMn` on Windows) is not there: the Nano's USB
 controller can't run serial, ADB and a network link at once. ADB keeps its usual
 interface number, so the PC's ADB driver keeps working.
+
+### Internet over the cable
+
+The Nano can use the host's internet connection over the same link, if the host
+shares it.
+
+**From a Windows PC** (Internet Connection Sharing, built into Windows):
+
+1. On the Nano, put these lines in `USB-link/usblink.conf` and open USB Link:
+
+   ```
+   NETWORK=rndis
+   ADDRESS=dhcp
+   DNS=1.1.1.1
+   ```
+
+   `DNS` is there because Windows' own DNS server for sharing answers "no such
+   name" whenever a name has no IPv6 address, and the Nano's C library then gives
+   up on the name altogether (NRK's radio streams fail that way). Any public DNS
+   server works; leave the line out to use Windows'.
+
+   A new network adapter appears on the PC ("Remote NDIS Compatible Device").
+2. On the PC, open **Control Panel → Network and Internet → Network Connections**
+   (or run `ncpa.cpl`). Right-click the adapter the PC uses for the internet
+   (Wi-Fi or Ethernet) → **Properties** → **Sharing**, tick **Allow other network
+   users to connect through this computer's Internet connection**, and under
+   **Home networking connection** pick the Nano's adapter. Click OK.
+3. Open USB Link on the Nano again. It asks the PC for an address and shows it
+   with "INTERNET VIA THE HOST".
+
+Windows then gives its side of the link `192.168.137.1` and hands the Nano an
+address in `192.168.137.x`, with a route and DNS. SSH uses that address too (USB
+Link shows it). Sharing stays on until you untick it, for that adapter: replugs
+and reboots of the Nano need nothing more, but **plugging into another USB port
+of the PC makes Windows create a new adapter** ("Remote NDIS Compatible Device #2"
+and so on, or the other way round), and sharing has to be turned on for that
+one. USB Link saying "NO DHCP" after a replug is usually that.
+
+Windows shares with one adapter at a time. After moving sharing from one adapter
+to another it can end up half set up: the adapter has `192.168.137.1`, but
+Windows answers no DHCP and forwards nothing. Untick sharing, click OK, and tick
+it again. A fixed address in the shared network also does without Windows' DHCP
+altogether:
+
+```
+NETWORK=rndis
+ADDRESS=192.168.137.5/24
+GATEWAY=192.168.137.1
+DNS=1.1.1.1
+```
+
+If no DHCP server answers (sharing is off, or a host without one), the Nano
+falls back to the usual address (`169.254.170.5/16` for `rndis`) and USB Link says
+"NO DHCP: NO INTERNET". ADB and SSH keep working.
+
+**From a Linux host** (another handheld, a Linux PC): give the host's side of the
+link an address, turn on forwarding and NAT, and tell the Nano where the gateway
+is. With the `ncm` defaults:
+
+```
+# on the host, as root (wlan0 = the host's internet connection)
+ip addr add 10.170.0.1/24 dev usb0   # the Nano's link, whatever the host calls it
+sysctl -w net.ipv4.ip_forward=1
+iptables -t nat -A POSTROUTING -s 10.170.0.0/24 -o wlan0 -j MASQUERADE
+```
+
+```
+# USB-link/usblink.conf on the Nano
+NETWORK=ncm
+GATEWAY=10.170.0.1
+DNS=1.1.1.1
+```
+
+`DNS` defaults to the gateway, which suits a host that runs a DNS server or proxy;
+set it when the host doesn't. A host that runs a DHCP server on the link can use
+`ADDRESS=dhcp` instead.
+
+The DNS servers go to `/etc/resolv.conf` (a file in RAM on this firmware); the
+route and address go with the link when it's unplugged.
 
 ### SSH
 
@@ -116,7 +197,9 @@ single CPU core is busy with the encryption.
    serial port's place. **If the network version won't start, it builds the stock
    ADB + serial one instead**, so USB is never left dead (the notice then says
    "ADB ONLY: NETWORK FAILED");
-4. waits up to 15 s for the host, then sets the address and starts SSH if asked;
+4. waits up to 15 s for the host, then sets the address (with `ADDRESS=dhcp`, asks
+   the host for one for up to 12 s), the route and DNS if set, and starts SSH if
+   asked;
 5. starts the auto-reconnect watcher (unless `WATCH=no`) and shows the result.
 
 Each run is logged to `/mnt/FunKey/usblink.log`, including the USB power, its
@@ -138,10 +221,13 @@ doesn't connect, that log is the first thing to read.
 ## Test hooks
 
 `usblink.sh` honours `USBLINK_GADGET`, `USBLINK_UDC_CLASS`, `USBLINK_DIR`,
-`USBLINK_LOG`, `USBLINK_POWER`, `USBLINK_RUN` (pid files and the watcher's copy),
-`USBLINK_TICK` and `USBLINK_SETTLE` (the watcher's timing), `USBLINK_DRYRUN=1`
-(print the plan, change nothing; with `--watch`, log rebuilds instead of doing
-them), `USBLINK_QUIET=1` (no on-screen notice) and `USBLINK_FORCE_FAIL=1` (make a
-network gadget fail to bind, to test the fallback). `tests/test_usblink.sh` uses
-them to test the decisions, and the watcher on fake status files, without
+`USBLINK_LOG`, `USBLINK_POWER`, `USBLINK_RUN` (pid files, the DHCP lease and the
+watcher's copy), `USBLINK_RESOLV` (the DNS file), `USBLINK_TICK` and
+`USBLINK_SETTLE` (the watcher's timing), `USBLINK_DRYRUN=1` (print the plan,
+change nothing; with `--watch`, log rebuilds instead of doing them),
+`USBLINK_QUIET=1` (no on-screen notice), `USBLINK_FORCE_FAIL=1` (make a network
+gadget fail to bind, to test the fallback) and `USBLINK_LINKTEST=IF` (only set
+up the address, route and DNS on interface `IF`, print the result and exit).
+`tests/test_usblink.sh` uses them to test the decisions, the link setup with
+stand-in `ip` and `udhcpc`, and the watcher on fake status files, without
 touching the real USB setup (which would cut its own `adb` session).

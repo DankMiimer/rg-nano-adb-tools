@@ -22,6 +22,9 @@
 # If a network gadget won't bind, the stock gadget is built instead, so USB is
 # never left dead. The Nano gets ADDRESS on the link and, if authorized_keys is
 # present, an SSH server (dropbear, key logins only, on that address only).
+# With ADDRESS=dhcp, or a GATEWAY, it also uses the host's internet connection:
+# the host has to share it (Windows: Internet Connection Sharing, which also
+# runs the DHCP server; Linux: NAT).
 #
 # Watch mode (WATCH=yes, the default): after a run, a watcher stays in the
 # background until the next reboot. When USB power is present but no host has
@@ -39,9 +42,15 @@
 #
 # Settings, all optional, in $DIR/usblink.conf (KEY=value lines):
 #   NETWORK=no|ncm|rndis    no (default): ADB + serial console, no link
-#   ADDRESS=a.b.c.d/nn      the Nano's address on the link; default
+#   ADDRESS=a.b.c.d/nn|dhcp the Nano's address on the link; default
 #                           10.170.0.5/24 for ncm, 169.254.170.5/16 for rndis
-#                           (Windows gives the adapter a 169.254 address itself)
+#                           (Windows gives the adapter a 169.254 address itself).
+#                           dhcp: address, route and DNS from the host's DHCP
+#                           server; the default address if none answers
+#   GATEWAY=a.b.c.d         with a fixed ADDRESS: route to the internet via the
+#                           host at this address (default: none)
+#   DNS=a.b.c.d[,a.b.c.d]   name servers with GATEWAY (default: the GATEWAY) or
+#                           with dhcp (default: the host's)
 #   SSH=auto|no             auto: start SSH if $DIR/authorized_keys exists
 #   WATCH=yes|no            yes (default): reconnect by itself after replugs
 #
@@ -51,20 +60,35 @@
 #   USBLINK_DIR        settings/keys   (default /mnt/USB-link)
 #   USBLINK_LOG        log file        (default /mnt/FunKey/usblink.log)
 #   USBLINK_POWER      USB power supply (default /sys/class/power_supply/axp20x-usb)
-#   USBLINK_RUN        pid files and the watcher's copy (default /tmp)
+#   USBLINK_RUN        pid files, the DHCP lease and the watcher's copy (default /tmp)
+#   USBLINK_RESOLV     DNS settings file (default /etc/resolv.conf)
 #   USBLINK_TICK       watcher poll interval in seconds (default 1)
 #   USBLINK_SETTLE     ticks the watcher gives a host before rebuilding (default 6)
 #   USBLINK_DRYRUN=1   print and log the plan, do not touch USB or the network;
 #                      with --watch, log the rebuilds instead of doing them
 #   USBLINK_QUIET=1    show no on-screen notices
 #   USBLINK_FORCE_FAIL=1  make a network gadget fail to bind (tests the fallback)
+#   USBLINK_LINKTEST=IF   only set up the address, route and DNS on interface IF,
+#                      print the result and exit (USB is not touched)
 
+# udhcpc runs this script for its events (-s), with the lease in its
+# environment: write the lease down for the run that started it, nothing else
+if [ -n "$USBLINK_DHCP_OUT" ]; then
+    # shellcheck disable=SC2154 # ip, mask, router, dns: set by udhcpc
+    case "$1" in
+        bound|renew) printf 'ip=%s\nmask=%s\nrouter=%s\ndns=%s\n' "$ip" "$mask" "$router" "$dns" > "$USBLINK_DHCP_OUT" ;;
+    esac
+    exit 0
+fi
+
+SELF="$(cd "$(dirname "$0")" && pwd)/$(basename "$0")"
 G="${USBLINK_GADGET:-/sys/kernel/config/usb_gadget/FunKey}"
 UDCS="${USBLINK_UDC_CLASS:-/sys/class/udc}"
 DIR="${USBLINK_DIR:-/mnt/USB-link}"
 LOG="${USBLINK_LOG:-/mnt/FunKey/usblink.log}"
 POWER="${USBLINK_POWER:-/sys/class/power_supply/axp20x-usb}"
 RUN="${USBLINK_RUN:-/tmp}"
+RESOLV="${USBLINK_RESOLV:-/etc/resolv.conf}"
 TICK="${USBLINK_TICK:-1}"
 SETTLE="${USBLINK_SETTLE:-6}"
 C="$G/configs/FunKey.1"
@@ -72,6 +96,7 @@ FFS=/dev/usb-ffs/adb
 DROPBEAR_PID="$RUN/usblink-dropbear.pid"
 WATCH_PID="$RUN/usblink-watch.pid"
 WATCH_COPY="$RUN/usblink-watch.sh"
+LEASE="$RUN/usblink-lease"
 
 log() { echo "$(date '+%F %T') $*" >> "$LOG" 2>/dev/null; sync; }
 
@@ -103,17 +128,102 @@ case "$NETWORK" in
     ""|no) KIND=acm ;;
     *) KIND=acm; log "unknown NETWORK=$NETWORK, using no" ;;
 esac
+case "$KIND" in
+    ncm) DEFAULT_ADDRESS=10.170.0.5/24 ;;
+    rndis) DEFAULT_ADDRESS=169.254.170.5/16 ;;
+    *) DEFAULT_ADDRESS=none ;;
+esac
 ADDRESS="$(conf ADDRESS)"
-if [ -z "$ADDRESS" ]; then
-    case "$KIND" in
-        ncm) ADDRESS=10.170.0.5/24 ;;
-        rndis) ADDRESS=169.254.170.5/16 ;;
-        *) ADDRESS=none ;;
-    esac
+if [ -z "$ADDRESS" ] || [ "$KIND" = acm ]; then ADDRESS="$DEFAULT_ADDRESS"; fi
+GATEWAY="$(conf GATEWAY)"
+DNS="$(conf DNS | tr ',' ' ')"
+if [ "$KIND" = acm ]; then
+    GATEWAY=none; DNS=none
+elif [ "$ADDRESS" = dhcp ]; then
+    GATEWAY=dhcp; DNS="${DNS:-dhcp}"
+elif [ -z "$GATEWAY" ]; then
+    GATEWAY=none; DNS=none
+else
+    DNS="${DNS:-$GATEWAY}"
 fi
 IP="${ADDRESS%/*}"
 SSH="$(conf SSH)"; SSH="${SSH:-auto}"
 case "$(conf WATCH)" in no) WATCH=0 ;; *) WATCH=1 ;; esac
+
+# dotted ADDR...: true if every argument is a dotted IPv4 address
+dotted() {
+    [ $# -gt 0 ] || return 1
+    for a in "$@"; do
+        case "$a" in *[!0-9.]*|"") return 1 ;; esac
+    done
+}
+
+# set_dns SERVER...: the name servers the Nano uses
+set_dns() { for d in "$@"; do echo "nameserver $d"; done > "$RESOLV"; }
+
+# dhcp IF: ask the host's DHCP server for an address, a route and DNS and set
+# them on IF; returns 1 if no server answers
+dhcp() {
+    rm -f "$LEASE"
+    USBLINK_DHCP_OUT="$LEASE" udhcpc -i "$1" -s "$SELF" -n -q -t 6 -T 2 >/dev/null 2>&1
+    [ -s "$LEASE" ] || return 1
+    l_ip=""; l_mask=""; l_router=""; l_dns=""
+    while IFS='=' read -r k v; do
+        case "$k" in
+            ip) l_ip="$v" ;;
+            mask) l_mask="$v" ;;
+            router) l_router="${v%% *}" ;;
+            dns) l_dns="$v" ;;
+        esac
+    done < "$LEASE"
+    rm -f "$LEASE"
+    # It comes from the network: use it only if it looks like addresses
+    dotted "$l_ip" || { log "dhcp: unusable address [$l_ip]"; return 1; }
+    case "$l_mask" in ""|*[!0-9]*) l_mask=24 ;; esac
+    ip addr add "$l_ip/$l_mask" dev "$1"
+    IP="$l_ip"
+    if dotted "$l_router"; then
+        ip route replace default via "$l_router" dev "$1"
+        ROUTED=1
+        # DNS from the settings wins: Windows' sharing DNS proxy answers
+        # "no such name" to IPv6 lookups, and musl then gives up on the name
+        # shellcheck disable=SC2086 # lists of servers
+        if [ "$DNS" != dhcp ]; then used="$DNS"
+        elif dotted $l_dns; then used="$l_dns"
+        else used="$l_router"; fi
+        # shellcheck disable=SC2086
+        set_dns $used
+    fi
+    log "dhcp: $l_ip/$l_mask, route via ${l_router:-none}, dns ${used:-none} (the host offered ${l_dns:-none})"
+}
+
+# net_config IF: address, route and DNS on the network link IF
+ROUTED=0; DHCP_FAILED=0
+net_config() {
+    ip addr flush dev "$1"
+    ip link set "$1" up
+    if [ "$ADDRESS" = dhcp ]; then
+        dhcp "$1" && return
+        log "dhcp: no answer from the host, using $DEFAULT_ADDRESS"
+        DHCP_FAILED=1
+        ip addr add "$DEFAULT_ADDRESS" dev "$1"
+        IP="${DEFAULT_ADDRESS%/*}"
+        return
+    fi
+    ip addr add "$ADDRESS" dev "$1"
+    if [ "$GATEWAY" != none ]; then
+        ip route replace default via "$GATEWAY" dev "$1"
+        # shellcheck disable=SC2086 # a list of servers
+        set_dns $DNS
+        ROUTED=1
+    fi
+}
+
+if [ -n "$USBLINK_LINKTEST" ]; then
+    net_config "$USBLINK_LINKTEST"
+    echo "link: ip=$IP routed=$ROUTED dhcp_failed=$DHCP_FAILED"
+    exit 0
+fi
 
 if [ ! -d "$G/functions/ffs.adb" ]; then
     [ "$1" = --watch ] && exit 0
@@ -240,14 +350,14 @@ wait_host() {
     return 1
 }
 
-# link_up: address on the network link and SSH, if this is a network gadget
+# link_up: address, route and DNS on the network link and SSH, if this is a
+# network gadget
 link_up() {
     if [ -f "$DROPBEAR_PID" ]; then kill "$(cat "$DROPBEAR_PID")" 2>/dev/null; rm -f "$DROPBEAR_PID"; fi
     [ "$KIND" = acm ] && return
     IF="$(cat "$G/functions/$FUNC/ifname")"
-    ip addr flush dev "$IF"
-    ip addr add "$ADDRESS" dev "$IF"
-    ip link set "$IF" up
+    ROUTED=0; DHCP_FAILED=0
+    net_config "$IF"
     [ "$SSHON" = 1 ] || return
     # /root is read-only and dropbear only reads ~/.ssh/authorized_keys, so
     # /root becomes a small RAM copy of itself with the key added
@@ -339,7 +449,7 @@ if [ "$1" = --watch ]; then
     exit 0
 fi
 
-PLAN="gadget=$KIND address=$ADDRESS ssh=$SSHON watch=$WATCH mac_dev=$MAC_DEV mac_host=$MAC_HOST"
+PLAN="gadget=$KIND address=$ADDRESS gateway=$GATEWAY dns=$(echo $DNS | tr ' ' ',') ssh=$SSHON watch=$WATCH mac_dev=$MAC_DEV mac_host=$MAC_HOST"
 log "start: udc $UDC state $(state), usb power $(cat "$POWER/online" 2>/dev/null), $PLAN"
 
 if [ -n "$USBLINK_DRYRUN" ]; then
@@ -361,11 +471,12 @@ rebuild
 CONNECTED=0
 wait_host 15 && CONNECTED=1
 link_up
-log "done: state $(state), connected $CONNECTED, fell back $FELLBACK"
+log "done: state $(state), connected $CONNECTED, fell back $FELLBACK, address $IP, routed $ROUTED"
 
 if [ "$WATCH" = 1 ]; then
     # From a copy in RAM: the menu unmounts the OPK when this app exits
-    cp "$(cd "$(dirname "$0")" && pwd)/$(basename "$0")" "$WATCH_COPY"
+    cp "$SELF" "$WATCH_COPY"
+    chmod +x "$WATCH_COPY"   # udhcpc runs it for DHCP events
     (cd / && setsid sh "$WATCH_COPY" --watch </dev/null >/dev/null 2>&1 &)
     AUTO="AUTO-RECONNECT ON"
 else
@@ -378,6 +489,10 @@ if [ "$CONNECTED" = 1 ]; then
         notice 4 "USB LINK: CONNECTED" "ADB ONLY: NETWORK FAILED" ${AUTO:+"$AUTO"}
     elif [ "$KIND" = acm ]; then
         notice 3 "USB LINK: CONNECTED" "ADB" ${AUTO:+"$AUTO"}
+    elif [ "$DHCP_FAILED" = 1 ]; then
+        notice 4 "USB LINK: CONNECTED" "ADB + NETWORK ($NET)" "$IP" "NO DHCP: NO INTERNET" ${AUTO:+"$AUTO"}
+    elif [ "$ROUTED" = 1 ]; then
+        notice 3 "USB LINK: CONNECTED" "ADB + NETWORK ($NET)" "$IP" "INTERNET VIA THE HOST" ${AUTO:+"$AUTO"}
     else
         notice 3 "USB LINK: CONNECTED" "ADB + NETWORK ($NET)" "$IP" ${AUTO:+"$AUTO"}
     fi
