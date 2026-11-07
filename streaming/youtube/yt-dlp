@@ -1,0 +1,4 @@
+#!/bin/sh
+# yt-dlp, precompiled for the Nano's Python 3.12 (see yt-dlp.d/)
+D="$(cd "$(dirname "$0")" && pwd)/yt-dlp.d"
+PYTHONPATH="$D${PYTHONPATH:+:$PYTHONPATH}" exec python3 -c 'import sys, yt_dlp; sys.argv[0] = "yt-dlp"; yt_dlp.main()' "$@"

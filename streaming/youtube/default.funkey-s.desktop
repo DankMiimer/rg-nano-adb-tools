@@ -1,0 +1,9 @@
+[Desktop Entry]
+Type=Application
+Name=NanoPlay
+Comment=YouTube for RG Nano
+Exec=run.sh
+Icon=nanoplay
+Categories=applications
+Terminal=false
+StartupNotify=true

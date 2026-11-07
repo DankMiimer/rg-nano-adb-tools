@@ -124,6 +124,16 @@ in `USB-link/usblink.conf` on the card: `NETWORK=rndis` for Windows (no PC setup
 needed: `ssh root@169.254.170.5`) or `NETWORK=ncm` for Linux hosts, with optional
 key-only SSH. More in [usblink/README.md](usblink/README.md).
 
+## YouTube and NRK streaming apps
+
+The installed **NanoPlay** (YouTube) and **NRK** TV/radio apps are also available
+in [streaming/](streaming/README.md), with source, build instructions and an
+[SD-card download](https://github.com/DankMiimer/rg-nano-adb-tools/releases/tag/streaming-2026.11.07).
+They need internet and a separately installed `Applications/MPlayer.opk`.
+NRK TV additionally needs your own stream key; the public download excludes
+keys, cookies, history and other personal data. See the streaming README for
+installation steps and the limits of this installed-app snapshot.
+
 ## Limits and known issues
 
 - ADB mode **hides the mass-storage drive**: use `push`/`pull` instead. The card

@@ -18,3 +18,11 @@ Thumbs.db
 
 # local assistant settings
 .claude/
+
+# Streaming builds and private app state
+streaming/dist/
+streaming/**/data/
+streaming/**/cache/
+streaming/**/cookies*.txt
+streaming/**/*.key
+streaming/**/*.log

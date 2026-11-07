@@ -8,3 +8,6 @@ nanoctl           text eol=lf
 
 *.png             binary
 *.opk             binary
+
+*.ttf             binary
+*.mp4             binary

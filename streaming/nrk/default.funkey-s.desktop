@@ -1,0 +1,9 @@
+[Desktop Entry]
+Type=Application
+Name=NRK
+Comment=NRK Direkte TV & Radio Tuner
+Exec=run.sh
+Icon=nrk
+Categories=applications
+Terminal=false
+StartupNotify=true
