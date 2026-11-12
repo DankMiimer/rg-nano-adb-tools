@@ -1,11 +1,12 @@
 #!/usr/bin/env python3
-"""Draw the 32x32 pixel-art icons for the USB Mode, USB Link and Wi-Fi OPKs (no PIL needed).
+"""Draw the 32x32 pixel-art icons for the USB Mode, USB Link, Wi-Fi and Connect OPKs (no PIL needed).
 
     make_icon.py usb out.png            USB trident  (entry "Switch to USB")
     make_icon.py adb out.png            ">_ ADB"     (entry "Switch to ADB")
     make_icon.py link out.png           two handhelds and a cable (entry "USB Link")
     make_icon.py wifi out.png           a dot and three arcs (entry "Wi-Fi")
-    make_icon.py <usb|adb|link|wifi> out.png --preview   also write out_x8.png (8x nearest)
+    make_icon.py connect out.png        the Wi-Fi sign over a USB plug (entry "Connect")
+    make_icon.py <usb|adb|link|wifi|connect> out.png --preview   also write out_x8.png (8x nearest)
 """
 import struct
 import sys
@@ -111,7 +112,26 @@ def draw_wifi(c):
                 c.put(x, y, INK)
 
 
-ICONS = {"usb": draw_usb, "adb": draw_adb, "link": draw_link, "wifi": draw_wifi}
+def draw_connect(c):
+    """The Wi-Fi sign over a USB plug: both ways the Nano connects."""
+    cx, cy = 15.5, 15.5
+    c.disc(cx, cy, 1.8, INK)
+    for y in range(H):
+        for x in range(W):
+            dx, dy = x - cx, cy - y
+            if dy <= 0 or abs(dx) > dy:
+                continue
+            r = (dx * dx + dy * dy) ** 0.5
+            if any(lo <= r <= lo + 2.0 for lo in (4.5, 8.5)):
+                c.put(x, y, INK)
+    c.rect(11, 20, 20, 25, INK)                   # plug body
+    c.rect(13, 22, 14, 23, BG)                    # its two contacts
+    c.rect(17, 22, 18, 23, BG)
+    c.rect(15, 26, 16, 28, INK)                   # cable
+
+
+ICONS = {"usb": draw_usb, "adb": draw_adb, "link": draw_link, "wifi": draw_wifi,
+         "connect": draw_connect}
 
 
 def png_bytes(pixels, scale=1):

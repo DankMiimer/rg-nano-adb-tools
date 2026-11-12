@@ -19,6 +19,9 @@
 #          driver by itself. Windows only asks for those the first time it sees
 #          a given USB ID and device version, and it has seen the stock gadget
 #          without them, so this mode reports device version 0x0415 (stock 0x0414).
+#          It also has its own product ID, 8087:011f (stock 8087:011e), so that
+#          Windows keeps the network adapter, and the sharing set up for it,
+#          from one run to the next (see build).
 # If a network gadget won't bind, the stock gadget is built instead, so USB is
 # never left dead. The Nano gets ADDRESS on the link and, if authorized_keys is
 # present, an SSH server (dropbear, key logins only, on that address only).
@@ -285,7 +288,20 @@ build() {
     esac
     mkdir "$G/functions/ffs.adb"
     echo 0x8087 > "$G/idVendor"
-    echo 0x011e > "$G/idProduct"
+    # The RNDIS gadget has a product ID of its own. Windows keeps one device
+    # entry per USB ID and serial number; with the stock ID, interface 0 of
+    # that entry was a serial port after every boot and a network adapter after
+    # every run of this, and each change made Windows set the adapter up as a
+    # brand new one, without the Internet Connection Sharing that was turned on
+    # for the last. With its own ID the adapter is the same one every time.
+    # ADB is found by its interface class on every host, so it doesn't mind.
+    # NCM keeps the stock ID: Handheld USB Link on other handhelds knows the
+    # Nano by it.
+    if [ "$1" = rndis ]; then
+        echo 0x011f > "$G/idProduct"
+    else
+        echo 0x011e > "$G/idProduct"
+    fi
     echo "Intel" > "$G/strings/0x409/manufacturer"
     echo "FunKey S" > "$G/strings/0x409/product"
     echo "$SERIAL" > "$G/strings/0x409/serialnumber"
@@ -472,6 +488,9 @@ CONNECTED=0
 wait_host 15 && CONNECTED=1
 link_up
 log "done: state $(state), connected $CONNECTED, fell back $FELLBACK, address $IP, routed $ROUTED"
+# The same for a caller that shows the result itself (the Connect app, which
+# runs this with USBLINK_QUIET=1)
+echo "result: connected=$CONNECTED fellback=$FELLBACK kind=$KIND ip=$IP routed=$ROUTED dhcp_failed=$DHCP_FAILED watch=$WATCH"
 
 if [ "$WATCH" = 1 ]; then
     # From a copy in RAM: the menu unmounts the OPK when this app exits

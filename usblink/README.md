@@ -93,14 +93,33 @@ Why two kinds:
 
 In network mode the serial port (`COMn` on Windows) is not there: the Nano's USB
 controller can't run serial, ADB and a network link at once. ADB keeps its usual
-interface number, so the PC's ADB driver keeps working.
+interface number and its serial number, and hosts find it by its interface
+class, so `adb` keeps working. With `rndis` the Nano reports the USB ID
+`8087:011f` instead of the stock `8087:011e`; with `ncm` it keeps the stock ID.
 
 ### Internet over the cable
 
 The Nano can use the host's internet connection over the same link, if the host
 shares it.
 
-**From a Windows PC** (Internet Connection Sharing, built into Windows):
+**From a Windows PC (automated):**
+
+Double-click [`Share-Internet.cmd`](Share-Internet.cmd) (or run
+`usblink/share-internet.sh` from WSL):
+
+- If `adb` is installed, it can configure `USB-link/usblink.conf` and switch the
+  Nano to RNDIS mode for you; otherwise open **Connect → USB** (or edit
+  `USB-link/usblink.conf` as below) first.
+- It finds the Nano's `VID_8087&PID_011F` RNDIS adapter and your active internet
+  adapter automatically, asks for Administrator permission (UAC) once, clears
+  any stale Windows Internet Connection Sharing binding, and turns sharing on.
+- If `adb` sees the Nano, it also renews the Nano's DHCP lease automatically;
+  otherwise press **Reconnect** on the Nano once more.
+
+Useful flags: `-Status`, `-Disable`, `-Force` (reset half-bound ICS),
+`-Source "<AdapterName>"`, `-ConfigureNano`, `-DryRun`.
+
+**From a Windows PC (manual, Internet Connection Sharing, built into Windows):**
 
 1. On the Nano, put these lines in `USB-link/usblink.conf` and open USB Link:
 
@@ -127,10 +146,19 @@ shares it.
 Windows then gives its side of the link `192.168.137.1` and hands the Nano an
 address in `192.168.137.x`, with a route and DNS. SSH uses that address too (USB
 Link shows it). Sharing stays on until you untick it, for that adapter: replugs
-and reboots of the Nano need nothing more, but **plugging into another USB port
-of the PC makes Windows create a new adapter** ("Remote NDIS Compatible Device #2"
-and so on, or the other way round), and sharing has to be turned on for that
-one. USB Link saying "NO DHCP" after a replug is usually that.
+and reboots of the Nano need nothing more.
+
+USB Link saying "NO DHCP" means Windows is not sharing with the adapter the Nano
+is on right now. Open the Sharing tab again and pick the adapter that is
+connected ("Remote NDIS Compatible Device", with or without a number).
+
+> **If you set this up before November 2026, do step 2 once more.** Until then
+> the network link used the same USB ID as the Nano's stock connection, and
+> Windows turned the same device entry into a serial port after every reboot of
+> the Nano and back into a network adapter when USB Link ran. Each time it came
+> back as a brand new adapter (its name could even stay the same), without the
+> sharing. The Windows link now has a USB ID of its own, `8087:011f`, so Windows
+> sees a new adapter one last time and then keeps it.
 
 Windows shares with one adapter at a time. After moving sharing from one adapter
 to another it can end up half set up: the adapter has `192.168.137.1`, but
@@ -149,9 +177,13 @@ If no DHCP server answers (sharing is off, or a host without one), the Nano
 falls back to the usual address (`169.254.170.5/16` for `rndis`) and USB Link says
 "NO DHCP: NO INTERNET". ADB and SSH keep working.
 
-**From a Linux host** (another handheld, a Linux PC): give the host's side of the
-link an address, turn on forwarding and NAT, and tell the Nano where the gateway
-is. With the `ncm` defaults:
+**From a Linux host** (another handheld, a Linux PC): run
+`usblink/share-internet.sh` (or `usblink/share-internet.sh --status` /
+`--disable`), which finds the Nano's interface (`8087:011e`/`011f`), sets
+`10.170.0.1/24`, turns on IP forwarding and NAT, and starts `dnsmasq` for DHCP if
+installed. Or do it by hand: give the host's side of the link an address, turn
+on forwarding and NAT, and tell the Nano where the gateway is. With the `ncm`
+defaults:
 
 ```
 # on the host, as root (wlan0 = the host's internet connection)

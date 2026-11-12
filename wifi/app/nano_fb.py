@@ -21,15 +21,45 @@ import os
 import struct
 from typing import Iterator
 
-W = 240
-H = 240
+FB_W = 240
+FB_H = 240
 BPP = 2
-STRIDE = W * BPP            # 480
-FRAME = STRIDE * H          # 115200 bytes for one visible frame
+STRIDE = FB_W * BPP         # 480
+FRAME = STRIDE * FB_H       # 115200 bytes for one visible frame
 
 FBDEV = os.environ.get("NANO_FB", "/dev/fb0")
 EVDEV = os.environ.get("NANO_EVDEV", "/dev/input/event0")
 TTYDEV = os.environ.get("NANO_TTY", "/dev/tty0")
+FKGPIOD = os.environ.get("NANO_FKGPIOD", "/etc/fkgpiod.conf")
+
+
+def is_gba_mini() -> bool:
+    """DrUm78's GBA Mini OS maps Start+A/B to X/Y (no dedicated X/Y buttons)."""
+    try:
+        with open(FKGPIOD) as f:
+            return "START+A" in f.read().replace(" ", "")
+    except OSError:
+        return False
+
+
+def detect_screen() -> tuple[int, int, int, int]:
+    """Visible window (x, y, w, h) inside the 240x240 framebuffer.
+    GBA Mini's 240x160 panel shows rows 48..207; RG Nano and FunKey S show
+    all 240x240."""
+    want = os.environ.get("NANO_SCREEN", "")
+    if want:
+        try:
+            size, x, y = want.split("+")
+            w, h = size.split("x")
+            return int(x), int(y), int(w), int(h)
+        except ValueError:
+            pass
+    if is_gba_mini():
+        return 0, 48, 240, 160
+    return 0, 0, FB_W, FB_H
+
+
+WX, WY, W, H = detect_screen()
 
 # ioctls
 KDSETMODE = 0x4B3A
@@ -79,7 +109,10 @@ class Pal:
 
 
 class Framebuffer:
-    def __init__(self) -> None:
+    def __init__(self, screen: tuple[int, int, int, int] | None = None) -> None:
+        if screen is None:
+            screen = detect_screen()
+        self.wx, self.wy, self.w, self.h = screen
         # Headless mode (offline preview on a dev box with no /dev/fb0).
         if os.environ.get("NANO_FB_HEADLESS"):
             self.fd = None
@@ -115,18 +148,22 @@ class Framebuffer:
     def fill(self, color: int) -> None:
         lo = color & 0xFF
         hi = (color >> 8) & 0xFF
-        self.buf[:] = bytes((lo, hi)) * (W * H)
+        if self.wx == 0 and self.wy == 0 and self.w == FB_W and self.h == FB_H:
+            self.buf[:] = bytes((lo, hi)) * (FB_W * FB_H)
+        else:
+            self.buf[:] = b"\x00" * FRAME
+            self.fill_rect(0, 0, self.w, self.h, color)
 
     def fill_rect(self, x: int, y: int, w: int, h: int, color: int) -> None:
         x0 = max(0, x); y0 = max(0, y)
-        x1 = min(W, x + w); y1 = min(H, y + h)
+        x1 = min(self.w, x + w); y1 = min(self.h, y + h)
         if x1 <= x0 or y1 <= y0:
             return
         lo = color & 0xFF
         hi = (color >> 8) & 0xFF
         row = bytes((lo, hi)) * (x1 - x0)
         for yy in range(y0, y1):
-            off = yy * STRIDE + x0 * BPP
+            off = (self.wy + yy) * STRIDE + (self.wx + x0) * BPP
             self.buf[off:off + len(row)] = row
 
     def rect(self, x: int, y: int, w: int, h: int, color: int, t: int = 1) -> None:
@@ -136,8 +173,8 @@ class Framebuffer:
         self.fill_rect(x + w - t, y, t, h, color)
 
     def px(self, x: int, y: int, color: int) -> None:
-        if 0 <= x < W and 0 <= y < H:
-            off = y * STRIDE + x * BPP
+        if 0 <= x < self.w and 0 <= y < self.h:
+            off = (self.wy + y) * STRIDE + (self.wx + x) * BPP
             self.buf[off] = color & 0xFF
             self.buf[off + 1] = (color >> 8) & 0xFF
 
@@ -181,7 +218,7 @@ class Framebuffer:
 
     def text_center(self, y: int, s: str, color: int, scale: int = 1,
                     bg: int | None = None) -> None:
-        self.text((W - self.text_width(s, scale)) // 2, y, s, color, scale, bg)
+        self.text((self.w - self.text_width(s, scale)) // 2, y, s, color, scale, bg)
 
     def flush(self) -> None:
         if self.mm is None:
