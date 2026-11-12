@@ -1,12 +1,62 @@
-# rg-nano-adb-tools
+# Drum78's OS USB & WiFi Link
 
-Develop on an **Anbernic RG Nano** over one USB cable: a real shell, file
-transfer, screenshots, a safe "run my app and give me the menu back" loop, an
-on-device shortcut that flips the Nano between ADB and USB-storage mode, and one
-that brings USB back after a replug without a reboot.
+One app (**Connect**) to get your **RG Nano**, **GBA Mini**, or **FunKey S** online over USB or a Wi-Fi dongle, share files between handhelds, and switch USB modes — without touching system files or editing config files by hand.
 
-The RG Nano has a single USB-C port. A WiFi dongle needs that port, so you can't
-charge while using it. Over ADB the cable gives you control **and** power.
+Requires [DrUm78's FunKey-OS](https://github.com/DrUm78/FunKey-OS) (tested on builds reporting `FunKey-OS 2.3.0`, kernel `4.14.14-funkey` from 2026-01-18).
+
+## Quick start
+
+### 1. Install `Connect.opk`
+
+1. Download **`Connect.opk`** from the [latest release](https://github.com/DankMiimer/drum78-os-usb-wifi-link/releases/latest).
+2. Connect your handheld to your PC in **Mount USB** mode and copy `Connect.opk` into the **`Applications`** folder on the SD card.
+3. Eject safely, reboot (or restart the menu), and open **Applications → Connect**.
+
+### 2. Get online over USB (Windows or Linux PC)
+
+1. Download **`Share-Internet.cmd`** and **`share-internet.ps1`** (for Windows, keep both in the same folder) or **`share-internet.sh`** (for Linux) from the [latest release](https://github.com/DankMiimer/drum78-os-usb-wifi-link/releases/latest).
+2. On your handheld, open **Connect → USB**:
+   - Set **Network** to **Windows** or **Linux**.
+   - Set **Internet** to **on**.
+   - If you are still in **USB Storage** mode, select **Mode** to switch to **ADB mode** (the handheld reboots once; you can switch back to USB Storage the same way anytime).
+3. Plug the handheld into your PC with a **USB-A to USB-C** cable *(USB-C to USB-C cables do not power the RG Nano)* and press **Apply / Reconnect** in **Connect → USB**.
+4. Share your PC's internet connection:
+   - **Windows:** double-click **`Share-Internet.cmd`** and approve the Administrator prompt.
+   - **Linux:** run `sudo ./share-internet.sh`.
+
+After setup, unplugging and replugging the cable reconnects automatically until the next reboot.
+
+### 3. Wi-Fi dongle, Handheld Link & USB mode switching
+
+- **USB Wi-Fi Dongle (RG Nano only):** plug in an **RTL8188FU / RTL8188FTV** USB Wi-Fi adapter and open **Connect → Wi-Fi** to scan and connect. *(Automatically hidden on GBA Mini and FunKey S, which don't support USB host mode.)*
+- **Handheld Link (0.4.0):** bundled inside **Connect → Handheld Link** for linking and sharing with another handheld (from [handheld-usb-link](https://github.com/DankMiimer/handheld-usb-link)).
+- **Switch USB Mode:** open **Connect → USB → Mode** anytime to reboot between **USB Storage** (for copying ROMs/files as a drive) and **ADB mode** (for USB internet, SSH, and `nanoctl`).
+
+## Supported devices
+
+| Handheld | Screen | Supported in Connect | Status |
+|---|---|---|---|
+| **RG Nano** | 240×240 | Wi-Fi, USB Link / Internet, Handheld Link, USB Mode | Tested on hardware |
+| **GBA Mini** | 240×160 window | USB Link / Internet, Handheld Link, USB Mode | Tested on hardware |
+| **FunKey S** | 240×240 | USB Link / Internet, Handheld Link, USB Mode | Tested offline |
+
+## Good to know
+
+- **Use a USB-A to USB-C cable** (or a USB-C to USB-A adapter on the host): a direct USB-C to USB-C cable gives the RG Nano no power.
+- **ADB mode hides the SD card drive:** switch back via **Connect → USB → Mode** whenever you want the SD card to appear as a normal USB drive, or use `nanoctl push` / `pull` while in ADB mode.
+- **One USB port:** on the RG Nano, Handheld Link waits for Wi-Fi to be off because the dongle and another handheld share the same USB-C port.
+- More edge cases and fixes: [docs/TROUBLESHOOTING.md](docs/TROUBLESHOOTING.md).
+
+---
+
+## Advanced & developer info
+
+Everything below is optional and meant for developers, command-line workflows, or building from source.
+
+<details>
+<summary><strong>Developer CLI (<code>nanoctl</code>, live <code>dev</code> loop, screenshots)</strong></summary>
+
+`nanoctl` lets you develop on a FunKey-OS handheld in ADB mode over one USB cable (control **and** power) from Linux, macOS, or Windows + WSL2:
 
 ```text
 $ nanoctl status
@@ -17,204 +67,141 @@ next boot: adb (/mnt/adb present)
 battery:   Charging 94%
 
 $ nanoctl dev --timeout 20 --shot 3 ./myapp.sh    # pause menu, run, screenshot, restore menu
-$ nanoctl shot                                    # what is on the screen right now?
+$ nanoctl shot                                    # capture current framebuffer PNG
 ```
 
-## Requirements
+### Requirements & setup
 
-**The Nano must run a FunKey OS build that supports ADB.** Many do not: ADB was
-only added to FunKey OS after its last tagged release, and the version number
-won't tell you (the build tested here reports `FunKey-OS 2.3.0` and has it). See
-[docs/FIRMWARE.md](docs/FIRMWARE.md) for how it works and how to find out
-whether yours does (it takes one reboot to try).
+- Handheld booted in **ADB mode** (either via **Connect → USB → Mode**, or by creating an empty file named `adb` in the root of the SD card's data partition and rebooting). See [docs/FIRMWARE.md](docs/FIRMWARE.md).
+- Host: `bash` 4+, `awk`, `sed`, `tr`, `grep`, and Android platform-tools (`adb` / `adb.exe`). Optional: `squashfs-tools` and `python3` for building OPKs and running offline tests.
+- Tested from Windows 11 + WSL2 (Ubuntu) using Windows `adb.exe` (1.0.41). Native Linux and macOS are supported in script logic but untested.
 
-Host:
+If `./nanoctl` isn't executable, run `bash nanoctl ...` or `chmod +x nanoctl`.
 
-- `bash` 4+, `awk`, `sed`, `tr`, `grep` and Android platform-tools (`adb`)
-- optional: `squashfs-tools` and `python3` to build the USB Mode and USB Link
-  OPKs, `python3` for the tests
-
-Tested on: an RG Nano running [DrUm78's FunKey-OS fork](https://github.com/DrUm78/FunKey-OS)
-(the device reports `FunKey-OS 2.3.0`; kernel `4.14.14-funkey`, built 2026-01-18),
-from Windows 11 + WSL2 (Ubuntu) using the Windows platform-tools `adb.exe`
-(1.0.41). Native Linux and macOS hosts are written for but **untested**; reports
-welcome.
-
-## Quick start
-
-1. Make the Nano boot in ADB mode: plug it in, mount USB storage, create an empty
-   file named `adb` in the root of the card's data partition, eject, then
-   **reboot the Nano** (replugging the cable is not enough).
-   Details and caveats: [docs/FIRMWARE.md](docs/FIRMWARE.md).
-2. Check it:
-
-   ```bash
-   ./nanoctl status
-   ```
-
-3. Install the on-device mode switch (optional but handy):
-
-   ```bash
-   usbmode/build_usbmode_opk.sh --refresh
-   ```
-
-   Rather not build it? Prebuilt OPKs, checksums and install steps (including for a
-   Nano that is still in storage mode) are attached to the
-   [latest release](https://github.com/DankMiimer/rg-nano-adb-tools/releases/latest).
-
-   If `./nanoctl` isn't executable, run `bash nanoctl ...` or `chmod +x nanoctl`.
-
-## Commands
+### Commands
 
 | Command | What it does |
 |---|---|
 | `status` | device, USB mode now / after next boot, battery, memory, free space |
 | `shell` | interactive shell |
-| `run <cmd...>` | run a command; **the exit status is the command's** |
-| `push <local> <remote> [mode]` | copy a file to the Nano |
-| `push-text <local> <remote> [mode]` | same, stripping CRs (scripts edited on Windows) |
-| `pull <remote> <local>` | copy a file from the Nano |
-| `shot [file.png]` | screenshot of the Nano's screen; prints the saved path |
-| `dev [opts] <app> [args]` | pause the menu, run an app, stream its output, restore the menu |
+| `run <cmd...>` | run a command with **the command's real exit status** |
+| `push <local> <remote> [mode]` | copy a file to the handheld |
+| `push-text <local> <remote> [mode]` | same, stripping `\r` (for scripts edited on Windows) |
+| `pull <remote> <local>` | copy a file from the handheld |
+| `shot [file.png]` | screenshot of the framebuffer; prints the saved path |
+| `dev [opts] <app> [args]` | pause the menu, run an app, stream output, restore menu |
 | `restart-menu` | restart the menu (also frees one left paused) |
 
-### `dev`
+### Using `dev`
 
 ```bash
-nanoctl dev ./myapp.sh                 # a local script or binary: pushed to /tmp/nano_dev, then run
-nanoctl dev ./game.opk                 # a local .opk: run with opkrun, the way the menu launches it
-nanoctl dev /usr/bin/something         # a path or command that already exists on the Nano
-nanoctl dev --timeout 20 ./myapp.sh    # kill it after 20 s if it hangs
-nanoctl dev --shot 3,10 ./myapp.sh     # screenshots 3 s and 10 s after it starts
+nanoctl dev ./myapp.sh                 # local script/binary: staged in /tmp/nano_dev
+nanoctl dev ./game.opk                 # local .opk: launched via opkrun
+nanoctl dev /usr/bin/something         # binary/script already on the handheld
+nanoctl dev --timeout 20 ./myapp.sh    # stop after 20 s
+nanoctl dev --shot 3,10 ./myapp.sh     # save screenshots 3 s and 10 s after start
 ```
 
-The menu owns the screen, so it is paused (`SIGSTOP`) while your app runs and
-restarted afterwards, which redraws the screen and drops stale button presses.
-The exit status is your app's. It refuses to run if no menu is running (another
-app may own the screen) unless you pass `--force`. Nothing is written to the
-SD card, so even if the PC or the cable dies mid-run a reboot recovers the Nano;
-see [docs/HOW_IT_WORKS.md](docs/HOW_IT_WORKS.md).
+The menu owns the framebuffer, so `nanoctl dev` pauses (`SIGSTOP`) it while your app runs and restarts it afterward. Nothing is written to the SD card; even if the cable disconnects mid-run, a reboot recovers cleanly. See [docs/HOW_IT_WORKS.md](docs/HOW_IT_WORKS.md).
 
-### The USB Mode shortcut
-
-`usbmode/` builds two tiny OPKs for the **Applications** menu. Only one is
-visible at a time, and its name and icon say what pressing it will do:
-
-| Nano is in | Entry shown | Pressing it |
-|---|---|---|
-| ADB mode | **Switch to USB** (USB symbol) | reboots into USB storage mode |
-| storage mode | **Switch to ADB** (`>_ ADB`) | reboots into ADB mode |
-
-You need it because the PC can't change the mode once the Nano is in storage
-mode (there is no shell then). More in [usbmode/README.md](usbmode/README.md).
-
-### USB Link
-
-After an unplug, the Nano's USB doesn't come back until a reboot, whatever the
-mode. `usblink/` builds a **USB Link** OPK for the **Applications** menu: open it
-once and ADB is back within a few seconds, no reboot. After that every replug
-reconnects by itself until the next reboot.
-
-```bash
-usblink/build_usblink_opk.sh --refresh
-```
-
-It can also put a network link on the same cable instead of the serial port, set
-in `USB-link/usblink.conf` on the card: `NETWORK=rndis` for Windows (no PC setup
-needed: `ssh root@169.254.170.5`) or `NETWORK=ncm` for Linux hosts, with optional
-key-only SSH. More in [usblink/README.md](usblink/README.md).
-
-## YouTube and NRK streaming apps
-
-The installed **NanoPlay** (YouTube) and **NRK** TV/radio apps are also available
-in [streaming/](streaming/README.md), with source, build instructions and an
-[SD-card download](https://github.com/DankMiimer/rg-nano-adb-tools/releases/tag/streaming-2026.11.07).
-They need internet and a separately installed `Applications/MPlayer.opk`.
-NRK TV additionally needs your own stream key; the public download excludes
-keys, cookies, history and other personal data. See the streaming README for
-installation steps and the limits of this installed-app snapshot.
-
-## Limits and known issues
-
-- ADB mode **hides the mass-storage drive**: use `push`/`pull` instead. The card
-  can't be shared with the PC while the Nano is using it.
-- The mode is read **only at boot**, so every switch is a reboot.
-- After an **unplug**, USB is gone until a reboot; open **USB Link** to bring it
-  back instead.
-- Use a **USB-A to USB-C** cable: over USB-C to USB-C the Nano gets no power.
-- `run` cannot read stdin, and nothing can be piped into `adb shell` on this
-  firmware (the shell never sees end-of-input). Use `push`.
-- `dev` kills your app's main process, not children it spawned.
-- Screenshots show the framebuffer (what was drawn), not the backlight state.
-- The USB Mode label only follows switches made with the shortcut. If you change
-  `/mnt/adb` by hand, re-run `usbmode/build_usbmode_opk.sh --refresh`.
-- A Linux `adb` inside WSL cannot see USB devices that Windows owns; `nanoctl`
-  picks the first `adb` that actually sees one, which will be `adb.exe`.
-
-More: [docs/TROUBLESHOOTING.md](docs/TROUBLESHOOTING.md).
-
-## Configuration
-
-All optional, via environment variables:
+### `nanoctl` environment variables
 
 | Variable | Default | Meaning |
 |---|---|---|
 | `NANO_ADB` | first `adb` that sees a device | path to `adb` / `adb.exe` |
 | `NANO_SERIAL` | the only attached device | adb serial (`ANDROID_SERIAL` also works) |
-| `NANO_SHOT_DIR` | `shots/` next to `nanoctl` | where `shot` saves by default |
-| `NANO_DEV_DIR` | `/tmp/nano_dev` (RAM disk) | where `dev` stages local apps |
-| `NANO_DEV_FRONTENDS` | `gmenu2x retrofe` | menu process names `dev` pauses |
+| `NANO_SHOT_DIR` | `shots/` next to `nanoctl` | default directory for `shot` |
+| `NANO_DEV_DIR` | `/tmp/nano_dev` (RAM disk) | staging directory for `dev` |
+| `NANO_DEV_FRONTENDS` | `gmenu2x retrofe` | menu processes `dev` pauses |
 | `NANO_STAGE_DIR` | Windows temp folder (WSL) | staging for files `adb.exe` can't read |
 
-## Tests
+</details>
+
+<details>
+<summary><strong>Building OPKs from source, standalone apps &amp; manual <code>usblink.conf</code></strong></summary>
+
+### Build and install Connect from source
+
+With a handheld connected in ADB mode:
+
+```bash
+connect/build_connect_opk.sh --refresh      # build Connect.opk, push to SD card, restart menu
+connect/build_connect_opk.sh --build-only   # build Connect.opk only
+connect/build_connect_opk.sh --retire-old   # park WiFi, USBLink, SwitchToUSB/ADB as *.opk.off
+```
+
+- Binaries (kernel modules, `wpa_supplicant`, Python runtime) come from [`wifi/build_wifi_opk.sh`](wifi/build_wifi_opk.sh) and are built automatically if missing (see [wifi/README.md](wifi/README.md#building)).
+- `HandheldLink.opk` is bundled automatically if present in a sibling `handheld-usb-link` checkout (`../handheld-usb-link/handheld-link/funkey/HandheldLink.opk`) or at `HLINK_OPK`.
+- Component guides: [connect/README.md](connect/README.md), [usblink/README.md](usblink/README.md), [wifi/README.md](wifi/README.md), [usbmode/README.md](usbmode/README.md).
+
+### Standalone OPKs
+
+Each piece can also still be built separately if you only want one part:
+
+```bash
+usblink/build_usblink_opk.sh --refresh
+usbmode/build_usbmode_opk.sh --refresh
+wifi/build_wifi_opk.sh --refresh
+```
+
+### Manual USB network config (`USB-link/usblink.conf`)
+
+Connect edits `USB-link/usblink.conf` automatically, or you can edit it by hand (`KEY=value` per line):
+
+- `NETWORK=no` | `rndis` (Windows) | `ncm` (Linux)
+- `ADDRESS=dhcp` (for host internet sharing) or a static CIDR (defaults: `169.254.170.5/16` for `rndis`, `10.170.0.5/24` for `ncm`)
+- `DNS=1.1.1.1` (auto-set by Connect for Windows internet sharing)
+- `SSH=auto` (starts key-only SSH when `USB-link/authorized_keys` exists) or `no`
+- `WATCH=yes` | `no` (auto-reconnect after replugs)
+
+PC sharing helpers support `-Status`, `-DryRun`, `-Yes`, `-Force`, and `-ConfigureNano` (`Share-Internet.cmd -Help` / `./share-internet.sh --help`). Logs are written to `/mnt/FunKey/usblink.log`.
+
+</details>
+
+<details>
+<summary><strong>Streaming apps, technical limits, tests &amp; prior art</strong></summary>
+
+### YouTube and NRK streaming apps
+
+**NanoPlay** (YouTube) and **NRK** TV/radio apps are documented in [streaming/](streaming/README.md) with source, build instructions, and an [SD-card download](https://github.com/DankMiimer/drum78-os-usb-wifi-link/releases/tag/streaming-2026.11.07). They require internet access and `Applications/MPlayer.opk` (NRK TV also requires your own stream key).
+
+### Technical limits & known issues
+
+- USB mode (`/mnt/adb`) is only read at boot, so every switch between ADB and USB storage is a reboot.
+- After unplugging the cable, USB does not re-enumerate until a reboot unless Connect / USB Link is running.
+- `nanoctl run` cannot read stdin, and nothing can be piped into `adb shell` on this firmware (`adbd` never sees EOF). Use `nanoctl push` / `push-text`.
+- `nanoctl dev` kills the main process it started, not detached child processes.
+- `nanoctl shot` captures the framebuffer (what was drawn), not backlight state.
+- Standalone `SwitchToUSB` / `SwitchToADB` labels only track switches made by the script itself. If you toggle `/mnt/adb` manually, re-run `usbmode/build_usbmode_opk.sh --refresh` (or use **Connect → USB → Mode**).
+- Inside WSL2, Linux `adb` cannot see USB devices owned by Windows; `nanoctl` picks the first `adb` that sees a device (usually Windows `adb.exe`).
+
+### Tests
+
+Offline unit tests (`test_connect.py`: 44 tests, `test_wifi_backend.py`: 13 tests):
+
+```bash
+python3 tests/test_connect.py
+python3 tests/test_wifi_backend.py
+```
+
+Full on-device integration tests (requires a real handheld in ADB mode, idle at the menu; flashes the screen and restarts the menu a few times without changing USB mode or files):
 
 ```bash
 tests/run_all.sh
 ```
 
-Integration tests against a **real** Nano in ADB mode, idle at the menu. The screen
-flashes red/blue and the menu restarts a few times. The USB mode, your menu
-entries and your files are not changed (the mode-switch tests are dry runs with
-everything redirected to `/tmp`, and show no notices).
+### Prior art
 
-## Prior art and related work
+- **ADB mode** on these devices comes from [DrUm78's FunKey-OS](https://github.com/DrUm78/FunKey-OS/releases/tag/FunKey-OS-DrUm78) (creating `/mnt/adb` and rebooting).
+- **SSH over USB networking** is covered in the [official FunKey docs](https://doc.funkey-project.com/developer_guide/tutorials/ssh_connection/).
+- **Running apps from shell** requires pausing/stopping the menu so `opkrun` can acquire the video mode.
 
-ADB on the Nano is not new, and this project doesn't claim it is:
+Related tools: [FunKey SDK guide](https://doc.funkey-project.com/developer_guide/tutorials/build_system/build_program_using_sdk/), [rgnano_sample_rs](https://github.com/bluexe203/rgnano_sample_rs), [funkeymonkey](https://github.com/bzar/funkeymonkey).
 
-- **ADB support itself** is part of DrUm78's FunKey-OS. Its
-  [release notes](https://github.com/DrUm78/FunKey-OS/releases/tag/FunKey-OS-DrUm78)
-  describe creating an empty `adb` file on the card, restarting and running
-  `adb shell`; the trick has also been shared in the FunKey community Discord since
-  at least 2023.
-- **SSH over USB networking** has an
-  [SSH page in the official docs](https://doc.funkey-project.com/developer_guide/tutorials/ssh_connection/)
-  and was written up by community members in 2022.
-- **Running an app from a remote shell** needs the menu out of the way: `opkrun` has
-  been reported to fail with "failed to set video mode" while the menu is running,
-  and the community advice has been to kill the front end by hand.
+</details>
 
-What this repo adds on top is tooling, not the feature: `run` with a real exit
-status on this firmware's old `adbd`; a `dev` loop that pauses the menu for you and
-restores it on any exit (even a pulled cable) without writing anything to the card;
-one-command screenshots; the self-labelling Switch to USB / Switch to ADB shortcut;
-WSL/Windows path handling; and an integration test suite. When this was written
-(October 2026) I did not find another packaged tool of this kind, but my search
-could easily have missed one: if you know of one, please say so.
+## Credits & license
 
-Related projects that solve different problems: the
-[FunKey SDK guide](https://doc.funkey-project.com/developer_guide/tutorials/build_system/build_program_using_sdk/)
-for cross-compiling programs (this repo doesn't compile your programs),
-[rgnano_sample_rs](https://github.com/bluexe203/rgnano_sample_rs) (a Rust toolchain
-for Windows) and [funkeymonkey](https://github.com/bzar/funkeymonkey) (an on-device
-evdev/uinput tool).
+Built on the work of the [FunKey Project](https://github.com/FunKey-Project) and [DrUm78's FunKey-OS fork](https://github.com/DrUm78/FunKey-OS). Not affiliated with Anbernic, the FunKey Project, or DrUm78.
 
-## Credits
-
-Built on the work of the [FunKey Project](https://github.com/FunKey-Project) and
-[DrUm78's FunKey-OS fork](https://github.com/DrUm78/FunKey-OS) for the RG Nano,
-which these tools were developed against. This project is not affiliated with
-Anbernic, the FunKey Project or DrUm78.
-
-## License
-
-[MIT](LICENSE).
+Released under the [MIT License](LICENSE).
