@@ -1,0 +1,308 @@
+#!/bin/sh
+
+INTERFACE="${WIFI_INTERFACE:-wlan0}"
+MUSB_MODE="/sys/devices/platform/soc/1c19000.usb/musb-hdrc.1.auto/mode"
+WPA_CONF="/mnt/wpa_supplicant.conf"
+WPA_PID="/var/run/wpa_supplicant.pid"
+WPA_CTRL="/var/run/wpa_supplicant"
+WIFI_LOG="/mnt/wifi_debug.log"
+USB_LOG="/mnt/usb_debug.log"
+WPA_DRIVER="${WPA_DRIVER:-wext,nl80211}"
+
+log()
+{
+    echo "$*" >> "$WIFI_LOG"
+}
+
+force_host_mode()
+{
+    if [ -w "$MUSB_MODE" ]; then
+        echo host > "$MUSB_MODE" 2>/dev/null
+        sleep 2
+    fi
+}
+
+load_wifi_stack()
+{
+    force_host_mode
+    modprobe rtl8188fu rtw_power_mgnt=0 rtw_enusbss=0 rtw_ips_mode=0 >> "$WIFI_LOG" 2>&1
+    if [ $? -ne 0 ]; then
+        ko=$(find /lib/modules -name 'rtl8188fu.ko' 2>/dev/null | head -n 1)
+        [ -n "$ko" ] && insmod "$ko" rtw_power_mgnt=0 rtw_enusbss=0 rtw_ips_mode=0 >> "$WIFI_LOG" 2>&1
+    fi
+    sleep 2
+    ip link set "$INTERFACE" up >/dev/null 2>&1
+}
+
+write_debug_header()
+{
+    : > "$WIFI_LOG"
+    echo "=== WiFi Connection Debug Log ===" >> "$WIFI_LOG"
+    echo "Date: $(date)" >> "$WIFI_LOG"
+    echo "Interface: $INTERFACE" >> "$WIFI_LOG"
+    echo "Driver preference: $WPA_DRIVER" >> "$WIFI_LOG"
+    echo "MUSB mode: $(cat "$MUSB_MODE" 2>/dev/null)" >> "$WIFI_LOG"
+    echo "USB devices:" >> "$WIFI_LOG"
+    for dev in /sys/bus/usb/devices/*; do
+        [ -f "$dev/idVendor" ] || continue
+        echo "  $(cat "$dev/idVendor" 2>/dev/null):$(cat "$dev/idProduct" 2>/dev/null) $(cat "$dev/product" 2>/dev/null)" >> "$WIFI_LOG"
+    done
+    echo "Module files:" >> "$WIFI_LOG"
+    find /lib/modules -name '*8188*' -o -name '*8189*' 2>/dev/null >> "$WIFI_LOG"
+}
+
+wait_for_association()
+{
+    echo -n "Waiting for association"
+    for _ in $(seq 1 20); do
+        if command -v wpa_cli >/dev/null 2>&1; then
+            if wpa_cli -i "$INTERFACE" status 2>/dev/null | grep -q 'wpa_state=COMPLETED'; then
+                echo " OK"
+                echo "Associated." >> "$WIFI_LOG"
+                return 0
+            fi
+        elif command -v iwconfig >/dev/null 2>&1; then
+            if iwconfig "$INTERFACE" 2>/dev/null | grep -q 'Access Point: [0-9A-Fa-f]'; then
+                echo " OK"
+                echo "Associated." >> "$WIFI_LOG"
+                return 0
+            fi
+        fi
+        echo -n "."
+        sleep 1
+    done
+    echo " timed out"
+    echo "Association timed out." >> "$WIFI_LOG"
+    return 1
+}
+
+start_dhcp()
+{
+    echo "Requesting IP address..."
+    echo "Requesting IP address..." >> "$WIFI_LOG"
+    if command -v udhcpc >/dev/null 2>&1; then
+        udhcpc -i "$INTERFACE" -n -q -t 5 -T 3 >> "$WIFI_LOG" 2>&1
+        return $?
+    fi
+
+    if command -v dhcpcd >/dev/null 2>&1; then
+        mkdir -p /var/db/dhcpcd /var/run
+        dhcpcd -B "$INTERFACE" >> "$WIFI_LOG" 2>&1
+        return $?
+    fi
+
+    echo "No DHCP client found." | tee -a "$WIFI_LOG"
+    return 1
+}
+
+show_connection_status()
+{
+    if command -v wpa_cli >/dev/null 2>&1; then
+        wpa_cli -i "$INTERFACE" status 2>/dev/null
+    fi
+    if command -v iwconfig >/dev/null 2>&1; then
+        iwconfig "$INTERFACE" 2>/dev/null
+    fi
+    ip addr show "$INTERFACE" 2>/dev/null
+}
+
+interactive_menu()
+{
+    while true; do
+        clear
+        echo "=================================="
+        echo "       RG Nano WiFi Setup         "
+        echo "=================================="
+        echo " 1) Check Connection Status"
+        echo " 2) Scan for WiFi Networks"
+        echo " 3) Connect to a Network"
+        echo " 4) Disconnect WiFi"
+        echo " 5) Exit"
+        echo "=================================="
+        echo -n "Select option [1-5]: "
+        read opt
+        case "$opt" in
+            1)
+                clear
+                echo "--- WiFi Status ---"
+                wifi status
+                echo ""
+                echo "Press Enter to return to menu..."
+                read junk
+                ;;
+            2)
+                clear
+                echo "--- Scanning Networks ---"
+                wifi scan
+                echo ""
+                echo "Press Enter to return to menu..."
+                read junk
+                ;;
+            3)
+                clear
+                echo "--- Connect to Network ---"
+                echo -n "Enter SSID: "
+                read ssid
+                [ -z "$ssid" ] && continue
+                echo -n "Enter Password (leave empty for open): "
+                read pass
+                echo ""
+                wifi connect "$ssid" "$pass"
+                echo ""
+                echo "Press Enter to return to menu..."
+                read junk
+                ;;
+            4)
+                clear
+                wifi disconnect
+                echo ""
+                echo "Press Enter to return to menu..."
+                read junk
+                ;;
+            5)
+                clear
+                exit 0
+                ;;
+            *)
+                echo "Invalid option. Press Enter to retry..."
+                read junk
+                ;;
+        esac
+    done
+}
+
+if [ -z "$1" ]; then
+    interactive_menu
+    exit 0
+fi
+
+case "$1" in
+    scan)
+        : > "$WIFI_LOG"
+        load_wifi_stack
+        if ! ip link show "$INTERFACE" >/dev/null 2>&1; then
+            echo "No $INTERFACE interface found. See $USB_LOG and $WIFI_LOG."
+            exit 1
+        fi
+        echo "Scanning for WiFi networks..."
+        if command -v iwlist >/dev/null 2>&1; then
+            iwlist "$INTERFACE" scan | grep -E 'ESSID|Signal level|Encryption key' | sed 's/^[ \t]*//'
+        elif command -v wpa_cli >/dev/null 2>&1; then
+            mkdir -p "$WPA_CTRL"
+            wpa_supplicant -B -i "$INTERFACE" -c "$WPA_CONF" -D "$WPA_DRIVER" -C "$WPA_CTRL" -P "$WPA_PID" -f "$WIFI_LOG" -dd 2>/dev/null
+            wpa_cli -i "$INTERFACE" scan >/dev/null 2>&1
+            sleep 5
+            wpa_cli -i "$INTERFACE" scan_results
+        else
+            echo "No scanner available; wireless-tools or wpa_cli is missing."
+        fi
+        ;;
+    connect)
+        SSID="$2"
+        PASS="$3"
+        if [ -z "$SSID" ]; then
+            echo "Usage: wifi connect <SSID> [password]"
+            exit 1
+        fi
+
+        write_debug_header
+        load_wifi_stack
+        if ! ip link show "$INTERFACE" >/dev/null 2>&1; then
+            echo "No $INTERFACE interface found. See $WIFI_LOG."
+            log "No $INTERFACE interface found after module load."
+            dmesg | grep -i -E 'usb|rtl|8188|firmware|wlan|cfg80211|mac80211' | tail -n 80 >> "$WIFI_LOG" 2>&1
+            exit 1
+        fi
+
+        echo "Connecting to $SSID..."
+        "$0" disconnect >/dev/null 2>&1
+        mkdir -p "$WPA_CTRL"
+
+        if [ -n "$PASS" ]; then
+            if command -v wpa_passphrase >/dev/null 2>&1; then
+                {
+                    echo "ctrl_interface=$WPA_CTRL"
+                    echo "update_config=1"
+                    wpa_passphrase "$SSID" "$PASS" | grep -v '#psk='
+                } > "$WPA_CONF"
+            else
+                cat > "$WPA_CONF" <<EOF
+ctrl_interface=$WPA_CTRL
+update_config=1
+network={
+    ssid="$SSID"
+    psk="$PASS"
+}
+EOF
+            fi
+        else
+            cat > "$WPA_CONF" <<EOF
+ctrl_interface=$WPA_CTRL
+update_config=1
+network={
+    ssid="$SSID"
+    key_mgmt=NONE
+}
+EOF
+        fi
+
+        echo "Kernel module status:" >> "$WIFI_LOG"
+        lsmod | grep -E 'rtl|8188|cfg80211|mac80211' >> "$WIFI_LOG" 2>&1
+        echo "Interface status:" >> "$WIFI_LOG"
+        ip link show "$INTERFACE" >> "$WIFI_LOG" 2>&1
+        echo "dmesg output:" >> "$WIFI_LOG"
+        dmesg | grep -i -E 'rtl|firmware|wlan|usb|cfg80211|mac80211' | tail -n 80 >> "$WIFI_LOG" 2>&1
+
+        wpa_supplicant -B -i "$INTERFACE" -c "$WPA_CONF" -D "$WPA_DRIVER" \
+            -C "$WPA_CTRL" -P "$WPA_PID" -f "$WIFI_LOG" -dd
+
+        wait_for_association
+
+        echo "Connection status after association attempt:" >> "$WIFI_LOG"
+        show_connection_status >> "$WIFI_LOG" 2>&1
+
+        start_dhcp
+        echo "IP address after DHCP:" >> "$WIFI_LOG"
+        ip addr show "$INTERFACE" >> "$WIFI_LOG" 2>&1
+        wifi status
+        ;;
+    status)
+        echo "Interface: $INTERFACE"
+        if ! ip link show "$INTERFACE" >/dev/null 2>&1; then
+            echo "Status: No interface"
+            exit 0
+        fi
+        if ip addr show "$INTERFACE" | grep -q "inet "; then
+            IP=$(ip addr show "$INTERFACE" | awk '/inet / {print $2; exit}' | cut -d/ -f1)
+            SSID=""
+            if command -v wpa_cli >/dev/null 2>&1; then
+                SSID=$(wpa_cli -i "$INTERFACE" status 2>/dev/null | awk -F= '/^ssid=/ {print $2; exit}')
+            fi
+            [ -z "$SSID" ] && SSID="unknown network"
+            echo "Status: Connected to $SSID"
+            echo "IP Address: $IP"
+            if command -v iwconfig >/dev/null 2>&1; then
+                iwconfig "$INTERFACE" | grep "Link Quality" | sed 's/^[ \t]*/Signal: /'
+            fi
+        else
+            echo "Status: Disconnected"
+            if command -v wpa_cli >/dev/null 2>&1; then
+                wpa_cli -i "$INTERFACE" status 2>/dev/null | grep -E 'wpa_state|ssid|key_mgmt|address'
+            fi
+        fi
+        ;;
+    disconnect)
+        echo "Disconnecting WiFi..."
+        [ -f "$WPA_PID" ] && kill "$(cat "$WPA_PID")" 2>/dev/null
+        rm -f "$WPA_PID"
+        killall wpa_supplicant >/dev/null 2>&1
+        killall udhcpc >/dev/null 2>&1
+        dhcpcd -k "$INTERFACE" >/dev/null 2>&1
+        ip addr flush dev "$INTERFACE" >/dev/null 2>&1
+        ip link set "$INTERFACE" down >/dev/null 2>&1
+        ;;
+    *)
+        echo "Usage: wifi {scan|connect|status|disconnect}"
+        exit 1
+        ;;
+esac

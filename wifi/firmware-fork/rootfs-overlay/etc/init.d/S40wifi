@@ -1,0 +1,219 @@
+#!/bin/sh
+#
+# Start WiFi if a USB WiFi dongle is connected.
+#
+
+INTERFACE="${WIFI_INTERFACE:-wlan0}"
+MUSB_MODE="/sys/devices/platform/soc/1c19000.usb/musb-hdrc.1.auto/mode"
+USB_LOG="/mnt/usb_debug.log"
+WIFI_LOG="/mnt/wifi_debug.log"
+WPA_CONF="/mnt/wpa_supplicant.conf"
+WPA_PID="/var/run/wpa_supplicant.pid"
+WPA_CTRL="/var/run/wpa_supplicant"
+WPA_DRIVER="${WPA_DRIVER:-wext,nl80211}"
+
+log()
+{
+    echo "$*" >> "$USB_LOG"
+}
+
+run_log()
+{
+    log "$ $*"
+    "$@" >> "$USB_LOG" 2>&1
+    rc=$?
+    log "exit=$rc"
+    return $rc
+}
+
+force_host_mode()
+{
+    if [ -w "$MUSB_MODE" ]; then
+        echo host > "$MUSB_MODE" 2>> "$USB_LOG"
+        sleep 2
+    fi
+}
+
+log_usb_state()
+{
+    log "MUSB OTG Mode: $(cat "$MUSB_MODE" 2>/dev/null)"
+    log "Connected USB Devices (Sysfs):"
+    for dev in /sys/bus/usb/devices/*; do
+        [ -f "$dev/idVendor" ] || continue
+        vid=$(cat "$dev/idVendor" 2>/dev/null)
+        pid=$(cat "$dev/idProduct" 2>/dev/null)
+        prod=$(cat "$dev/product" 2>/dev/null)
+        mfg=$(cat "$dev/manufacturer" 2>/dev/null)
+        log "  USB Dev: VID=$vid PID=$pid | $mfg - $prod"
+    done
+}
+
+load_wifi_module()
+{
+    log "Module files matching 8188:"
+    find /lib/modules -name '*8188*' -o -name '*8189*' 2>/dev/null >> "$USB_LOG"
+
+    log "Attempting to load rtl8188fu module..."
+    run_log modprobe rtl8188fu rtw_power_mgnt=0 rtw_enusbss=0 rtw_ips_mode=0
+    if [ $? -ne 0 ]; then
+        ko=$(find /lib/modules -name 'rtl8188fu.ko' 2>/dev/null | head -n 1)
+        if [ -n "$ko" ]; then
+            log "modprobe failed; trying direct insmod: $ko"
+            run_log insmod "$ko" rtw_power_mgnt=0 rtw_enusbss=0 rtw_ips_mode=0
+        fi
+    fi
+
+    sleep 2
+    log "Kernel driver modules loaded:"
+    lsmod | grep -E 'rtl|8188|cfg80211|mac80211' >> "$USB_LOG" 2>&1
+    log "Network interfaces:"
+    ip link >> "$USB_LOG" 2>&1
+    log "dmesg USB / Network events:"
+    dmesg | grep -i -E 'usb|musb|hub|rtl|8188|firmware|wlan|cfg80211|mac80211' | tail -n 80 >> "$USB_LOG" 2>&1
+}
+
+start_dhcp()
+{
+    echo "Requesting IP address..." >> "$WIFI_LOG"
+    if command -v udhcpc >/dev/null 2>&1; then
+        udhcpc -i "$INTERFACE" -n -q -t 5 -T 3 >> "$WIFI_LOG" 2>&1
+        return $?
+    fi
+
+    if command -v dhcpcd >/dev/null 2>&1; then
+        mkdir -p /var/db/dhcpcd /var/run
+        dhcpcd -B "$INTERFACE" >> "$WIFI_LOG" 2>&1
+        return $?
+    fi
+
+    echo "No DHCP client found." >> "$WIFI_LOG"
+    return 1
+}
+
+configure_ip()
+{
+    if [ -f /mnt/ip.txt ]; then
+        IP=""
+        NETMASK="255.255.255.0"
+        GATEWAY=""
+        DNS=""
+        
+        . /mnt/ip.txt
+        
+        if [ -n "$IP" ]; then
+            echo "Configuring static IP: $IP netmask $NETMASK" >> "$WIFI_LOG"
+            ifconfig "$INTERFACE" "$IP" netmask "$NETMASK" >> "$WIFI_LOG" 2>&1
+            if [ -n "$GATEWAY" ]; then
+                echo "Adding default gateway: $GATEWAY" >> "$WIFI_LOG"
+                route add default gw "$GATEWAY" dev "$INTERFACE" >> "$WIFI_LOG" 2>&1
+            fi
+            if [ -n "$DNS" ]; then
+                echo "Adding DNS: $DNS" >> "$WIFI_LOG"
+                echo "nameserver $DNS" > /etc/resolv.conf
+            fi
+            return 0
+        fi
+    fi
+
+    start_dhcp
+}
+
+start_wifi()
+{
+    : > "$USB_LOG"
+    echo "=== USB Boot Debug Log ===" >> "$USB_LOG"
+    log "Boot Time: $(date)"
+
+    force_host_mode
+    log_usb_state
+    load_wifi_module
+
+    if ! ip link show "$INTERFACE" >/dev/null 2>&1; then
+        echo "No $INTERFACE interface found."
+        log "No $INTERFACE interface found after module load."
+        return 0
+    fi
+
+    echo "$INTERFACE ready."
+    
+    # Set persistent MAC address derived from CPU serial
+    SERIAL="$(grep Serial /proc/cpuinfo | sed 's/Serial\s*: \(\w*\)/\1/')"
+    if [ -n "$SERIAL" ]; then
+        MAC_SUFFIX="$(echo ${SERIAL} | cut -b 7- | sed 's/\(\w\w\)/:\1/g' | cut -b 2-)"
+        WIFI_MAC="0e:${MAC_SUFFIX}"
+        log "Setting persistent MAC address: $WIFI_MAC"
+        run_log ip link set "$INTERFACE" address "$WIFI_MAC"
+    fi
+
+    run_log ip link set "$INTERFACE" up
+
+    if [ ! -f "$WPA_CONF" ]; then
+        echo "No WiFi configuration found at $WPA_CONF. Run WiFi Setup."
+        log "No WiFi configuration found at $WPA_CONF."
+        return 0
+    fi
+
+    : > "$WIFI_LOG"
+    echo "=== WiFi Boot Connection Log ===" >> "$WIFI_LOG"
+    echo "Boot Time: $(date)" >> "$WIFI_LOG"
+    echo "Interface: $INTERFACE" >> "$WIFI_LOG"
+    echo "Driver preference: $WPA_DRIVER" >> "$WIFI_LOG"
+    echo "Config: $WPA_CONF" >> "$WIFI_LOG"
+
+    mkdir -p "$WPA_CTRL"
+    killall wpa_supplicant >/dev/null 2>&1
+    rm -f "$WPA_PID"
+
+    wpa_supplicant -B -i "$INTERFACE" -c "$WPA_CONF" -D "$WPA_DRIVER" \
+        -C "$WPA_CTRL" -P "$WPA_PID" -f "$WIFI_LOG" -dd
+
+    echo "Waiting for association..." >> "$WIFI_LOG"
+    for _ in $(seq 1 20); do
+        if command -v wpa_cli >/dev/null 2>&1; then
+            if wpa_cli -i "$INTERFACE" status 2>/dev/null | grep -q 'wpa_state=COMPLETED'; then
+                echo "Associated." >> "$WIFI_LOG"
+                break
+            fi
+        elif command -v iwconfig >/dev/null 2>&1; then
+            if iwconfig "$INTERFACE" 2>/dev/null | grep -q 'Access Point: [0-9A-Fa-f]'; then
+                echo "Associated." >> "$WIFI_LOG"
+                break
+            fi
+        fi
+        sleep 1
+    done
+
+    if command -v wpa_cli >/dev/null 2>&1; then
+        echo "wpa_cli status:" >> "$WIFI_LOG"
+        wpa_cli -i "$INTERFACE" status >> "$WIFI_LOG" 2>&1
+    fi
+    if command -v iwconfig >/dev/null 2>&1; then
+        echo "iwconfig status:" >> "$WIFI_LOG"
+        iwconfig "$INTERFACE" >> "$WIFI_LOG" 2>&1
+    fi
+
+    configure_ip
+    echo "IP address after configuration:" >> "$WIFI_LOG"
+    ip addr show "$INTERFACE" >> "$WIFI_LOG" 2>&1
+}
+
+case "$1" in
+  start)
+    printf "Initializing WiFi: "
+    start_wifi
+    ;;
+  stop)
+    printf "Stopping WiFi: "
+    /usr/local/sbin/wifi disconnect >/dev/null 2>&1
+    echo "OK"
+    ;;
+  restart|reload)
+    "$0" stop
+    "$0" start
+    ;;
+  *)
+    echo "Usage: $0 {start|stop|restart}"
+    exit 1
+esac
+
+exit 0

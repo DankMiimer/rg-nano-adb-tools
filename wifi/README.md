@@ -16,14 +16,16 @@ supported" and does nothing. See [Safety](#safety).
 
 ## Install
 
+**Prebuilt:** download `WiFi.opk` from the
+[Wi-Fi release](https://github.com/DankMiimer/rg-nano-adb-tools/releases/tag/wifi-2026.10.31)
+and copy it into the `Applications` folder of the Nano's drive.
+
 **From source** (the Nano must be in ADB mode; see [Building](#building) for
 what the build needs):
 
 ```bash
 wifi/build_wifi_opk.sh --refresh
 ```
-
-Or copy `WiFi.opk` into the `Applications` folder of the Nano's drive yourself.
 
 ## Use
 
@@ -134,6 +136,12 @@ Without wireless extensions, old tools like `iwconfig` and `iwlist` don't work;
   work; WPA3-only, WEP and enterprise (login) networks are listed but refused.
 - No charging while the dongle is in, and no ADB: the Nano has one USB port.
 - One dongle chipset. Other chipsets need their own driver built the same way.
+
+## Building it into the firmware instead
+
+If you build your own FunKey-OS, Wi-Fi can live in the firmware and none of the
+safety machinery above is needed. Notes and the scripts from an earlier build
+that did that are in [firmware-fork/](firmware-fork/README.md).
 
 ## Building
 
