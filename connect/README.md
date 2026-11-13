@@ -5,8 +5,8 @@
 behind a single entry in the **Applications** menu (for **RG Nano**, **FunKey S**,
 and **GBA Mini** running DrUm78's FunKey-OS builds), and adds the USB Link
 settings that used to need a file edited on the PC. On the GBA Mini it draws
-inside its 240×160 visible screen area and hides the Wi-Fi row on peripheral-only
-handhelds (GBA Mini, FunKey S).
+inside its 240×160 visible screen area and hides the Wi-Fi row on
+peripheral-only devices (verified on GBA Mini; untested on hardware for FunKey S).
 
 Nothing new runs underneath: Connect drives the same three scripts the separate
 apps do (`wifi.sh`, `usblink.sh`, `usbmode.sh`), and their own pages describe

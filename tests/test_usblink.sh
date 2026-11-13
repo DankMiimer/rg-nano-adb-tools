@@ -160,6 +160,7 @@ WENV="USBLINK_DRYRUN=1 USBLINK_QUIET=1 USBLINK_TICK=0.2 USBLINK_SETTLE=2 USBLINK
 power() { "$R" run "echo $1 > $W/pw/online"; }
 udc() { "$R" run "echo '$1' > $W/udc/fake.udc/state"; }
 rebuilds() { "$R" run "grep -c 'nothing rebuilt' $W/log"; }
+rebinds() { "$R" run "grep -c 'nothing rebound' $W/log"; }
 check "watcher is running" alive "$("$R" run "kill -0 \$(cat $W/run/usblink-watch.pid) 2>/dev/null && echo alive || echo dead")"
 has "starting unplugged is noticed" "watch: unplugged" "$("$R" run "cat $W/log")"
 power 1; sleep 2
@@ -181,6 +182,17 @@ udc configured; sleep 1; udc 'not attached'; sleep 2
 check "connects again, then dropped again: one more rebuild" 4 "$(rebuilds)"
 "$R" run "kill \$(cat $W/run/usblink-watch.pid)"; sleep 1
 check "watcher stops when killed" dead "$("$R" run "kill -0 \$(cat $W/run/usblink-watch.pid) 2>/dev/null && echo alive || echo dead")"
+
+echo "== W2. GBA Mini style power (online=0, present=1): still reconnects and rebinds =="
+"$R" run "rm -rf $W/log $W/pw/present; echo 0 > $W/pw/online; echo 1 > $W/pw/present; echo 'not attached' > $W/udc/fake.udc/state"
+"$R" run "USBLINK_REBIND=2 $WENV setsid sh /tmp/usblink_test.sh --watch </dev/null >/dev/null 2>&1 & sleep 2"
+check "online=0 + present=1 starts no extra rebuild until armed" 0 "$(rebuilds)"
+check "online=0 + idle not-attached triggers periodic silent rebind" 1 "$([ "$(rebinds)" -ge 1 ] && echo 1 || echo 0)"
+udc configured; sleep 1
+has "logs when host connects after rebind" "watch: host connected, state configured" "$("$R" run "cat $W/log")"
+udc 'not attached'; sleep 2
+check "configured -> not attached rebuilds even when online=0" 1 "$(rebuilds)"
+"$R" run "kill \$(cat $W/run/usblink-watch.pid) 2>/dev/null || true"
 "$R" run "rm -rf $W"
 
 echo "== F. MAC addresses: fixed, locally administered, same suffix =="

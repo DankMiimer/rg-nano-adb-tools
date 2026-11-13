@@ -191,7 +191,8 @@ def state() -> dict:
     except (OSError, IndexError):
         udc = ""
     udc_state = _read(os.path.join(UDCS, udc, "state")) if udc else ""
-    power = _read(os.path.join(POWER, "online")) == "1"
+    power = (_read(os.path.join(POWER, "online")) == "1"
+             or _read(os.path.join(POWER, "present")) == "1")
     link = ""
     for kind in ("rndis", "ncm"):
         if os.path.exists(os.path.join(GADGET, "configs", "FunKey.1", kind + ".usb0")):

@@ -67,6 +67,8 @@
 #   USBLINK_RESOLV     DNS settings file (default /etc/resolv.conf)
 #   USBLINK_TICK       watcher poll interval in seconds (default 1)
 #   USBLINK_SETTLE     ticks the watcher gives a host before rebuilding (default 6)
+#   USBLINK_REBIND     ticks between silent UDC rebinds on peripheral-power
+#                      devices whose USB online flag stays 0, e.g. GBA Mini (default 5)
 #   USBLINK_DRYRUN=1   print and log the plan, do not touch USB or the network;
 #                      with --watch, log the rebuilds instead of doing them
 #   USBLINK_QUIET=1    show no on-screen notices
@@ -94,6 +96,7 @@ RUN="${USBLINK_RUN:-/tmp}"
 RESOLV="${USBLINK_RESOLV:-/etc/resolv.conf}"
 TICK="${USBLINK_TICK:-1}"
 SETTLE="${USBLINK_SETTLE:-6}"
+REBIND="${USBLINK_REBIND:-5}"
 C="$G/configs/FunKey.1"
 FFS=/dev/usb-ffs/adb
 DROPBEAR_PID="$RUN/usblink-dropbear.pid"
@@ -124,6 +127,14 @@ notice() {
 }
 
 state() { s=""; read -r s < "$UDCS/$UDC/state" 2>/dev/null; echo "$s"; }
+
+# usb_power: 1 when USB power is detected. On RG Nano axp20x-usb/online is 1; on
+# GBA Mini online stays 0 even while connected and only present is 1.
+usb_power() {
+    read -r _o < "$POWER/online" 2>/dev/null && [ "$_o" = 1 ] && echo 1 && return
+    read -r _o < "$POWER/present" 2>/dev/null && [ "$_o" = 1 ] && echo 1 && return
+    echo 0
+}
 
 NETWORK="$(conf NETWORK)"
 case "$NETWORK" in
@@ -355,7 +366,7 @@ wait_host() {
     last=""
     while [ $i -le "$1" ]; do
         v=0; read -r v < "$POWER/voltage_now" 2>/dev/null
-        o=""; read -r o < "$POWER/online" 2>/dev/null
+        o="$(usb_power)"
         st="$(state)"
         s="state $st, usb power $o at $((v / 1000000)).$((v / 100000 % 10)) V"
         [ "$s" != "$last" ] && log "  ${i}s: $s" && last="$s"
@@ -406,28 +417,55 @@ no_host() {
     esac
 }
 
+rebind_udc() {
+    if [ -n "$USBLINK_DRYRUN" ]; then
+        log "watch: dry run, nothing rebound"
+        return
+    fi
+    echo "" > "$G/UDC" 2>/dev/null
+    sleep 0.3
+    echo "$UDC" > "$G/UDC" 2>/dev/null
+}
+
 # watch: the background loop of watch mode
 # A rebuild disarms it; an unplug (USB power gone) or a host configuring the
 # gadget (a working connection) arms it again. So a replug, or a host dropping a
 # working connection while the port stays powered (a PC rebooting with the cable
 # in, a host resetting its port), gets one rebuild, and a charger, which powers
 # the Nano but never configures it, gets one per plug-in and no more.
+# On devices whose axp20x-usb/online stays 0 (GBA Mini), a periodic silent UDC
+# rebind catches the next cable insertion while not attached.
 watch() {
     echo $$ > "$WATCH_PID"
     log "watch: started"
     armed=0   # the run that started this one has just rebuilt
+    saw_online=0
+    need_link=0
+    idle_ticks=0
     prev_o=""
     prev_st=""
     while :; do
-        o=0; read -r o < "$POWER/online" 2>/dev/null
+        online_raw=0; read -r online_raw < "$POWER/online" 2>/dev/null
+        [ "$online_raw" = 1 ] && saw_online=1
+        o="$(usb_power)"
         st=""; read -r st < "$UDCS/$UDC/state" 2>/dev/null
         if [ "$o" != 1 ]; then
             [ "$prev_o" != 0 ] && log "watch: unplugged"
             armed=1
+            need_link=1
+            idle_ticks=0
         elif [ "$st" = configured ]; then
+            if [ "$need_link" = 1 ]; then
+                log "watch: host connected, state $st"
+                [ -z "$USBLINK_DRYRUN" ] && link_up
+                need_link=0
+            fi
             armed=1
+            idle_ticks=0
         elif no_host "$st" && [ "$armed" = 1 ]; then
             armed=0
+            need_link=1
+            idle_ticks=0
             if [ "$prev_st" = configured ]; then
                 why="host dropped the connection"
             else
@@ -440,19 +478,27 @@ watch() {
                 read -r st < "$UDCS/$UDC/state" 2>/dev/null
                 n=$((n + 1))
             done
-            read -r o < "$POWER/online" 2>/dev/null
+            o="$(usb_power)"
             if [ "$o" = 1 ] && no_host "$st"; then
                 log "watch: $why (state $st), rebuilding"
                 if [ -n "$USBLINK_DRYRUN" ]; then
                     log "watch: dry run, nothing rebuilt"
                 else
                     rebuild
-                    wait_host 15
-                    link_up
+                    wait_host 15 && { link_up; need_link=0; }
                     st="$(state)"
                     log "watch: done, state $st"
                 fi
             fi
+        elif no_host "$st" && [ "$saw_online" = 0 ] && [ "$REBIND" -gt 0 ] 2>/dev/null; then
+            need_link=1
+            idle_ticks=$((idle_ticks + 1))
+            if [ "$idle_ticks" -ge "$REBIND" ]; then
+                idle_ticks=0
+                rebind_udc
+            fi
+        else
+            idle_ticks=0
         fi
         prev_o="$o"
         prev_st="$st"
@@ -466,7 +512,7 @@ if [ "$1" = --watch ]; then
 fi
 
 PLAN="gadget=$KIND address=$ADDRESS gateway=$GATEWAY dns=$(echo $DNS | tr ' ' ',') ssh=$SSHON watch=$WATCH mac_dev=$MAC_DEV mac_host=$MAC_HOST"
-log "start: udc $UDC state $(state), usb power $(cat "$POWER/online" 2>/dev/null), $PLAN"
+log "start: udc $UDC state $(state), usb power $(usb_power), $PLAN"
 
 if [ -n "$USBLINK_DRYRUN" ]; then
     echo "plan: $PLAN"

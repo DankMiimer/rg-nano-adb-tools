@@ -509,6 +509,16 @@ class Screens(Base):
         self.assertEqual(g.seen[0][2][0], ("USB", "ADB + net"))
         self.assertEqual([s for s in g.seen if s[0] == "message"][-1][2][0], "Connect: GBA Mini")
 
+    def test_gba_mini_present_power_counts_as_connected(self):
+        put(FKGPIOD, "MAP START+A TO KEY KEY_X\nMAP START+B TO KEY KEY_Y\n")
+        port(can_host=False, power=False, udc_state="configured", link="rndis")
+        self.assertFalse(usb.state()["connected"])
+        put(os.path.join(POWER, "present"), "1\n")
+        st = usb.state()
+        self.assertTrue(st["power"])
+        self.assertTrue(st["connected"])
+        self.assertEqual(usb.tag(st), "ADB + net")
+
 
 if __name__ == "__main__":
     try:
