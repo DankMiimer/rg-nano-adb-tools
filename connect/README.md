@@ -6,7 +6,7 @@ behind a single entry in the **Applications** menu (for **RG Nano**, **FunKey S*
 and **GBA Mini** running DrUm78's FunKey-OS builds), and adds the USB Link
 settings that used to need a file edited on the PC. On the GBA Mini it draws
 inside its 240×160 visible screen area and hides the Wi-Fi row on
-peripheral-only devices (verified on GBA Mini; untested on hardware for FunKey S).
+peripheral-only handhelds (GBA Mini and FunKey S — only the RG Nano enables USB OTG/host mode in DrUm78's kernel, so USB Wi-Fi dongles work on RG Nano only).
 
 Nothing new runs underneath: Connect drives the same three scripts the separate
 apps do (`wifi.sh`, `usblink.sh`, `usbmode.sh`), and their own pages describe

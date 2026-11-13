@@ -28,7 +28,7 @@ After setup, unplugging and replugging the cable reconnects automatically until 
 
 ### 3. Wi-Fi dongle, Handheld Link & USB mode switching
 
-- **USB Wi-Fi Dongle (RG Nano):** plug in an **RTL8188FU / RTL8188FTV** USB Wi-Fi adapter and open **Connect → Wi-Fi** to scan and connect. *(Automatically hidden when the device doesn't expose USB host mode—such as the GBA Mini, whose kernel device tree sets the USB port to peripheral-only.)*
+- **USB Wi-Fi Dongle (RG Nano only):** plug in an **RTL8188FU / RTL8188FTV** USB Wi-Fi adapter and open **Connect → Wi-Fi** to scan and connect. **Only the RG Nano supports a USB Wi-Fi dongle** — in DrUm78's kernel source, only the RG Nano enables USB OTG/host mode (`dr_mode = "otg"`), while FunKey S, GBA Mini, and Q36 Mini are peripheral-only (`dr_mode = "peripheral"`), so Connect hides the Wi-Fi option on them automatically.
 - **Handheld Link (0.4.0):** bundled inside **Connect → Handheld Link** for linking and sharing with another handheld (from [handheld-usb-link](https://github.com/DankMiimer/handheld-usb-link)).
 - **Switch USB Mode:** open **Connect → USB → Mode** anytime to reboot between **USB Storage** (for copying ROMs/files as a drive) and **ADB mode** (for USB internet, SSH, and `nanoctl`).
 
