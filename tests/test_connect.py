@@ -51,6 +51,7 @@ os.environ.update({
                                       'exit "${STUB_EXIT:-0}"\n' % CALLS),
     "USBMODE_SH": stub("usbmode.sh", 'echo "apps=$USBMODE_APPS quiet=$USBMODE_QUIET" >> "%s"\n'
                                       'exit "${STUB_EXIT:-0}"\n' % CALLS),
+    "HLINK_GADGET_SH": stub("gadget.sh", 'echo "gadget=$*" >> "%s"\n' % CALLS),
 })
 import usb_backend as usb  # noqa: E402
 import wifi_gui  # noqa: E402
@@ -518,6 +519,42 @@ class Screens(Base):
         self.assertTrue(st["power"])
         self.assertTrue(st["connected"])
         self.assertEqual(usb.tag(st), "ADB + net")
+
+    def test_handheld_link_prepares_stock_gadget_and_stops_watch(self):
+        put(FKGPIOD, "MAP START+A TO KEY KEY_X\nMAP START+B TO KEY KEY_Y\n")
+        port(can_host=False, link="rndis")
+        conf("NETWORK=rndis\nADDRESS=dhcp\n")
+        pidfile = os.path.join(RUN, "usblink-watch.pid")
+        put(pidfile, "999999\n")
+        bundled = os.path.join(T, "hlink")
+        os.makedirs(bundled, exist_ok=True)
+        started = []
+        with mock.patch.object(connect_gui, "HLINK_DIR", bundled), \
+                mock.patch.object(connect_gui, "HLINK_DATA", os.path.join(T, "hlink-data")), \
+                mock.patch.object(os, "dup2"), mock.patch.object(os, "chdir"), \
+                mock.patch.object(os, "execve", lambda exe, argv, env: started.append(argv[1:])):
+            self.run_hub(["down", "a", "menu"])
+        self.assertEqual(len(started), 1)
+        self.assertEqual(calls(), ["gadget=stock"])
+        self.assertFalse(os.path.exists(pidfile))
+        self.assertEqual(conf_text(), "NETWORK=rndis\nADDRESS=dhcp\n")
+
+    def test_handheld_link_in_storage_mode_offers_switch(self):
+        port(can_host=False, mode="storage")
+        bundled = os.path.join(T, "hlink")
+        os.makedirs(bundled, exist_ok=True)
+        with mock.patch.object(connect_gui, "HLINK_DIR", bundled), \
+                mock.patch.object(os, "execve", side_effect=AssertionError("must not start")):
+            seen = self.run_hub(["down", "a", "b", "menu"])
+        msgs = [s for s in seen if s[0] == "message"]
+        self.assertEqual(msgs[0][2][0], "Needs ADB mode.")
+        self.assertEqual(calls(), [])
+
+    def test_usb_back_prompts_to_apply_when_dirty(self):
+        seen = self.run_hub(["down", "a", "down", "a", "b", "a", "a", "menu"])
+        msgs = [s for s in seen if s[0] == "message"]
+        self.assertEqual(msgs[0][2][0], "Apply your new USB")
+        self.assertEqual(calls(), ["quiet=1"])
 
 
 if __name__ == "__main__":

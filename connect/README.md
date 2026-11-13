@@ -32,7 +32,10 @@ Connect
 bundled as it is when its OPK is at hand at build time (see Install). Choosing
 it hands the screen over to it; leaving Handheld Link goes back to the Nano's
 menu, not to Connect, because the Nano's 64 MB has no room for both at once. It
-waits for Wi-Fi to be off: the dongle and the other handheld need the same port.
+waits for Wi-Fi to be off (the dongle and the other handheld need the same port),
+and if you used **USB Link** in network mode earlier, Connect stops its watcher and
+restores the stock ADB gadget automatically (leaving `usblink.conf` intact) so
+Handheld Link gets full ~5 MB/s transfer speed.
 
 The USB page, in ADB mode:
 

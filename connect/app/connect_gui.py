@@ -67,18 +67,19 @@ def usb_reconnect(g):
     g.message("USB", lines)
 
 
-def usb_switch_mode(g, st):
+def usb_switch_mode(g, st, title="USB mode", ask=None):
     to_storage = st["mode"] == "adb"
-    if to_storage:
-        ask = ["Switch to USB storage?", "The Nano reboots.", "ADB stops; Mount USB",
-               "then shares the card."]
-    else:
-        ask = ["Switch to ADB?", "The Nano reboots.", "The USB drive is not", "there in ADB mode."]
-    if not g.confirm("USB mode", ask):
+    if ask is None:
+        if to_storage:
+            ask = ["Switch to USB storage?", "The Nano reboots.", "ADB stops; Mount USB",
+                   "then shares the card."]
+        else:
+            ask = ["Switch to ADB?", "The Nano reboots.", "The USB drive is not", "there in ADB mode."]
+    if not g.confirm(title, ask):
         return
-    g.busy("USB mode", ["Switching to", "storage..." if to_storage else "ADB...", "Rebooting."])
+    g.busy(title, ["Switching to", "storage..." if to_storage else "ADB...", "Rebooting."])
     if usb.switch_mode() != 0:
-        g.message("USB mode", ["Could not switch:", "cannot write to the", "SD card (/mnt)."])
+        g.message(title, ["Could not switch:", "cannot write to the", "SD card (/mnt)."])
         return
     while True:             # the Nano is going down; keep the notice up
         time.sleep(5)
@@ -131,12 +132,12 @@ def usb_menu(g):
         choice = g.menu("USB", [(r[0], r[1]) for r in rows], status=usb.tag(st), sel=sel)
         if choice == "QUIT":
             return "QUIT"
-        if choice is None:
+        if choice is None or rows[choice][2] == "back":
+            if dirty and g.confirm("USB", ["Apply your new USB", "settings now?"]):
+                usb_reconnect(g)
             return None
         sel = choice
         action = rows[choice][2]
-        if action == "back":
-            return None
         if action == "reconnect":
             usb_reconnect(g)
             dirty = False
@@ -189,10 +190,17 @@ def start_hlink(g):
     """Hand the screen over to Handheld Link. It replaces this app instead of
     running beside it: the Nano has 64 MB, and two Pythons with a file copy
     going is one too many. Leaving Handheld Link goes back to the menu."""
-    if usb.state()["host"] and wifi.status().get("on"):
+    st = usb.state()
+    if st["host"] and wifi.status().get("on"):
         g.message("Handheld Link", ["The USB port is in use", "by the Wi-Fi dongle.", "Turn Wi-Fi off first."])
         return
-    g.busy("Handheld Link", ["Starting..."])
+    if st["mode"] == "storage":
+        usb_switch_mode(g, st, title="Handheld Link",
+                        ask=["Needs ADB mode.", "Switch to ADB now?", "The device reboots."])
+        return
+    msg = "Preparing USB link..." if (not st["host"] and st["link"]) else "Starting..."
+    g.busy("Handheld Link", [msg])
+    usb.prepare_hlink()
     g.close()
     env = dict(os.environ, PYTHONPATH=usb.ROOT)
     env.pop("NANO_NO_VT", None)

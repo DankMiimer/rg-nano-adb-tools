@@ -11,12 +11,14 @@ from __future__ import annotations
 
 import glob
 import os
+import signal
 import subprocess
 
 HERE = os.path.dirname(os.path.abspath(__file__))
 ROOT = os.path.dirname(HERE)
 USBLINK_SH = os.environ.get("USBLINK_SH", os.path.join(ROOT, "usblink.sh"))
 USBMODE_SH = os.environ.get("USBMODE_SH", os.path.join(ROOT, "usbmode.sh"))
+GADGET_SH = os.environ.get("HLINK_GADGET_SH", os.path.join(ROOT, "gadget.sh"))
 # the same test hooks as the scripts
 GADGET = os.environ.get("USBLINK_GADGET", "/sys/kernel/config/usb_gadget/FunKey")
 UDCS = os.environ.get("USBLINK_UDC_CLASS", "/sys/class/udc")
@@ -268,3 +270,35 @@ def switch_mode() -> int:
                               stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL).returncode
     except Exception:
         return 1
+
+
+def stop_watch() -> bool:
+    """Stop USB Link's background watcher if running; returns True if stopped."""
+    pidfile = os.path.join(RUN, "usblink-watch.pid")
+    raw = _read(pidfile)
+    stopped = False
+    if raw.isdigit():
+        try:
+            os.kill(int(raw), signal.SIGTERM)
+            stopped = True
+        except OSError:
+            pass
+    try:
+        os.unlink(pidfile)
+    except OSError:
+        pass
+    return stopped
+
+
+def prepare_hlink() -> None:
+    """Stop USB Link's watcher and restore the stock ADB+serial gadget if a
+    network link (RNDIS/NCM) is active, so Handheld Link can use its fast
+    network link without modifying usblink.conf."""
+    stop_watch()
+    st = state()
+    if not st["host"] and st["mode"] == "adb" and st["link"] and os.path.isfile(GADGET_SH):
+        try:
+            subprocess.run(["sh", GADGET_SH, "stock"], timeout=60,
+                           stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+        except Exception:
+            pass
