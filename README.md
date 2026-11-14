@@ -26,9 +26,10 @@ Requires [DrUm78's FunKey-OS](https://github.com/DrUm78/FunKey-OS) (tested on bu
 
 After setup, unplugging and replugging the cable reconnects automatically until the next reboot.
 
-### 3. Wi-Fi dongle, Handheld Link & USB mode switching
+### 3. Wi-Fi dongle, Achievements, Handheld Link & USB mode switching
 
-- **USB Wi-Fi Dongle (RG Nano only):** plug in an **RTL8188FU / RTL8188FTV** USB Wi-Fi adapter and open **Connect → Wi-Fi** to scan and connect. **Only the RG Nano supports a USB Wi-Fi dongle** — in DrUm78's kernel source, only the RG Nano enables USB OTG/host mode (`dr_mode = "otg"`), while FunKey S, GBA Mini, and Q36 Mini are peripheral-only (`dr_mode = "peripheral"`), so Connect hides the Wi-Fi option on them automatically.
+- **USB Wi-Fi Dongle (RG Nano only):** plug in an **RTL8188FU / RTL8188FTV** USB Wi-Fi adapter and open **Connect → Wi-Fi Dongle** to scan and connect. **Only the RG Nano supports a USB Wi-Fi dongle** — in DrUm78's kernel source, only the RG Nano enables USB OTG/host mode (`dr_mode = "otg"`), while FunKey S, GBA Mini, and Q36 Mini are peripheral-only (`dr_mode = "peripheral"`), so Connect hides Wi-Fi Dongle on them automatically.
+- **Achievements (offline RetroAchievements sync):** open **Connect → Achievements** while online (Wi-Fi Dongle or USB internet) to sign in (or import `/mnt/FunKey/raoffline/login.txt`), run **Scan ROMs** to cache game and achievement metadata for your ROMs locally, and hit **Sync Now** anytime to upload offline-earned unlocks and view your **Pending Queue** and **History**.
 - **Handheld Link (0.4.0):** bundled inside **Connect → Handheld Link** for linking and sharing with another handheld (from [handheld-usb-link](https://github.com/DankMiimer/handheld-usb-link)). Connect automatically clears PC USB network settings/watchers for you on launch so transfers use the fast USB network link instead of falling back to ADB speed.
 - **Switch USB Mode:** open **Connect → USB → Mode** anytime to reboot between **USB Storage** (for copying ROMs/files as a drive) and **ADB mode** (for USB internet, SSH, and `nanoctl`).
 
@@ -36,9 +37,9 @@ After setup, unplugging and replugging the cable reconnects automatically until 
 
 | Handheld | Screen | Supported in Connect | Status |
 |---|---|---|---|
-| **RG Nano** | 240×240 | Wi-Fi, USB Link / Internet, Handheld Link, USB Mode | Tested on hardware |
-| **GBA Mini** | 240×160 window | USB Link / Internet, Handheld Link, USB Mode | Tested on hardware |
-| **FunKey S** | 240×240 | USB Link / Internet, Handheld Link, USB Mode | Tested offline |
+| **RG Nano** | 240×240 | Wi-Fi Dongle, USB Link / Internet, Achievements, Handheld Link, USB Mode | Tested on hardware |
+| **GBA Mini** | 240×160 window | USB Link / Internet, Achievements, Handheld Link, USB Mode | Tested on hardware |
+| **FunKey S** | 240×240 | USB Link / Internet, Achievements, Handheld Link, USB Mode | Tested offline |
 
 ## Good to know
 

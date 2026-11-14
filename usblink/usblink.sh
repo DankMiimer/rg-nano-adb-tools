@@ -69,6 +69,9 @@
 #   USBLINK_SETTLE     ticks the watcher gives a host before rebuilding (default 6)
 #   USBLINK_REBIND     ticks between silent UDC rebinds on peripheral-power
 #                      devices whose USB online flag stays 0, e.g. GBA Mini (default 5)
+#   USBLINK_DHCP_RETRY ticks between DHCP retries in watch mode after fallback
+#                      (default 10; 0 disables)
+#   USBLINK_DHCP_MAX_RETRIES max DHCP retries per connection in watch mode (default 12)
 #   USBLINK_DRYRUN=1   print and log the plan, do not touch USB or the network;
 #                      with --watch, log the rebuilds instead of doing them
 #   USBLINK_QUIET=1    show no on-screen notices
@@ -97,6 +100,8 @@ RESOLV="${USBLINK_RESOLV:-/etc/resolv.conf}"
 TICK="${USBLINK_TICK:-1}"
 SETTLE="${USBLINK_SETTLE:-6}"
 REBIND="${USBLINK_REBIND:-5}"
+DHCP_RETRY="${USBLINK_DHCP_RETRY:-10}"
+DHCP_MAX_RETRIES="${USBLINK_DHCP_MAX_RETRIES:-12}"
 C="$G/configs/FunKey.1"
 FFS=/dev/usb-ffs/adb
 DROPBEAR_PID="$RUN/usblink-dropbear.pid"
@@ -137,8 +142,9 @@ usb_power() {
 }
 
 NETWORK="$(conf NETWORK)"
+FUNC=""
 case "$NETWORK" in
-    ncm|rndis) KIND="$NETWORK" ;;
+    ncm|rndis) KIND="$NETWORK"; FUNC="$NETWORK.usb0" ;;
     ""|no) KIND=acm ;;
     *) KIND=acm; log "unknown NETWORK=$NETWORK, using no" ;;
 esac
@@ -175,11 +181,11 @@ dotted() {
 # set_dns SERVER...: the name servers the Nano uses
 set_dns() { for d in "$@"; do echo "nameserver $d"; done > "$RESOLV"; }
 
-# dhcp IF: ask the host's DHCP server for an address, a route and DNS and set
-# them on IF; returns 1 if no server answers
+# dhcp IF [TRIES]: ask the host's DHCP server for an address, a route and DNS
+# and set them on IF; returns 1 if no server answers
 dhcp() {
     rm -f "$LEASE"
-    USBLINK_DHCP_OUT="$LEASE" udhcpc -i "$1" -s "$SELF" -n -q -t 6 -T 2 >/dev/null 2>&1
+    USBLINK_DHCP_OUT="$LEASE" udhcpc -i "$1" -s "$SELF" -n -q -t "${2:-6}" -T 2 >/dev/null 2>&1
     [ -s "$LEASE" ] || return 1
     l_ip=""; l_mask=""; l_router=""; l_dns=""
     while IFS='=' read -r k v; do
@@ -194,8 +200,11 @@ dhcp() {
     # It comes from the network: use it only if it looks like addresses
     dotted "$l_ip" || { log "dhcp: unusable address [$l_ip]"; return 1; }
     case "$l_mask" in ""|*[!0-9]*) l_mask=24 ;; esac
+    [ "$DHCP_FAILED" = 1 ] && ip addr del "$DEFAULT_ADDRESS" dev "$1" 2>/dev/null
     ip addr add "$l_ip/$l_mask" dev "$1"
     IP="$l_ip"
+    DHCP_FAILED=0
+    rm -f "$RUN/usblink-dhcp-pending"
     if dotted "$l_router"; then
         ip route replace default via "$l_router" dev "$1"
         ROUTED=1
@@ -214,12 +223,14 @@ dhcp() {
 # net_config IF: address, route and DNS on the network link IF
 ROUTED=0; DHCP_FAILED=0
 net_config() {
+    rm -f "$RUN/usblink-dhcp-pending"
     ip addr flush dev "$1"
     ip link set "$1" up
     if [ "$ADDRESS" = dhcp ]; then
         dhcp "$1" && return
         log "dhcp: no answer from the host, using $DEFAULT_ADDRESS"
         DHCP_FAILED=1
+        : > "$RUN/usblink-dhcp-pending"
         ip addr add "$DEFAULT_ADDRESS" dev "$1"
         IP="${DEFAULT_ADDRESS%/*}"
         return
@@ -377,15 +388,10 @@ wait_host() {
     return 1
 }
 
-# link_up: address, route and DNS on the network link and SSH, if this is a
-# network gadget
-link_up() {
+# start_ssh: run dropbear on $IP when SSH is enabled
+start_ssh() {
     if [ -f "$DROPBEAR_PID" ]; then kill "$(cat "$DROPBEAR_PID")" 2>/dev/null; rm -f "$DROPBEAR_PID"; fi
-    [ "$KIND" = acm ] && return
-    IF="$(cat "$G/functions/$FUNC/ifname")"
-    ROUTED=0; DHCP_FAILED=0
-    net_config "$IF"
-    [ "$SSHON" = 1 ] || return
+    [ "$SSHON" = 1 ] || return 0
     # /root is read-only and dropbear only reads ~/.ssh/authorized_keys, so
     # /root becomes a small RAM copy of itself with the key added
     if ! touch /root/.usblink 2>/dev/null; then
@@ -405,6 +411,17 @@ link_up() {
     cp "$DIR/dropbear_ed25519_host_key" "$RUN/usblink-hostkey"
     chmod 600 "$RUN/usblink-hostkey"
     dropbear -s -r "$RUN/usblink-hostkey" -p "$IP:22" -P "$DROPBEAR_PID"
+}
+
+# link_up: address, route and DNS on the network link and SSH, if this is a
+# network gadget
+link_up() {
+    if [ -f "$DROPBEAR_PID" ]; then kill "$(cat "$DROPBEAR_PID")" 2>/dev/null; rm -f "$DROPBEAR_PID"; fi
+    [ "$KIND" = acm ] && return
+    IF="$(cat "$G/functions/$FUNC/ifname")"
+    ROUTED=0; DHCP_FAILED=0
+    net_config "$IF"
+    start_ssh
 }
 
 # no_host STATE: true for the gadget states that mean no host is talking to it.
@@ -438,10 +455,13 @@ rebind_udc() {
 watch() {
     echo $$ > "$WATCH_PID"
     log "watch: started"
+    [ -e "$RUN/usblink-dhcp-pending" ] && DHCP_FAILED=1
     armed=0   # the run that started this one has just rebuilt
     saw_online=0
     need_link=0
     idle_ticks=0
+    dhcp_ticks=0
+    dhcp_tries=0
     prev_o=""
     prev_st=""
     while :; do
@@ -454,11 +474,27 @@ watch() {
             armed=1
             need_link=1
             idle_ticks=0
+            dhcp_ticks=0
+            dhcp_tries=0
         elif [ "$st" = configured ]; then
             if [ "$need_link" = 1 ]; then
                 log "watch: host connected, state $st"
                 [ -z "$USBLINK_DRYRUN" ] && link_up
                 need_link=0
+                dhcp_ticks=0
+                dhcp_tries=0
+            elif [ -z "$USBLINK_DRYRUN" ] && [ "$KIND" != acm ] && [ "$ADDRESS" = dhcp ] && [ "$DHCP_FAILED" = 1 ] \
+                 && [ "$DHCP_RETRY" -gt 0 ] 2>/dev/null && [ "$dhcp_tries" -lt "$DHCP_MAX_RETRIES" ] 2>/dev/null; then
+                dhcp_ticks=$((dhcp_ticks + 1))
+                if [ "$dhcp_ticks" -ge "$DHCP_RETRY" ]; then
+                    dhcp_ticks=0
+                    dhcp_tries=$((dhcp_tries + 1))
+                    IF="$(cat "$G/functions/$FUNC/ifname" 2>/dev/null)"
+                    if [ -n "$IF" ] && dhcp "$IF" 3; then
+                        start_ssh
+                        log "watch: dhcp acquired ($IP, routed $ROUTED) on retry $dhcp_tries"
+                    fi
+                fi
             fi
             armed=1
             idle_ticks=0
@@ -466,6 +502,8 @@ watch() {
             armed=0
             need_link=1
             idle_ticks=0
+            dhcp_ticks=0
+            dhcp_tries=0
             if [ "$prev_st" = configured ]; then
                 why="host dropped the connection"
             else

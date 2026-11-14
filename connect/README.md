@@ -14,15 +14,16 @@ what those do, the settings files and the limits. Like them it works on the
 stock firmware and changes nothing on the system partition. The Wi-Fi part only
 loads into the kernel it was checked against (see [Safety](../wifi/README.md#safety)).
 
-> **Status:** built, tested offline (44 tests), and verified on RG Nano and GBA Mini. FunKey S support follows the same `funkey-s` / `240×240` FunKey-OS layout and is tested offline.
+> **Status:** built, tested offline (75 unit tests across Connect, Achievements, and Wi-Fi), and verified on RG Nano and GBA Mini. FunKey S support follows the same `funkey-s` / `240×240` FunKey-OS layout and is tested offline.
 
 ## The screens
 
 ```
 Connect
-  Wi-Fi          off / on / the network's name    -> the Wi-Fi Setup screens
+  Wi-Fi Dongle   off / on / the network's name    -> the Wi-Fi Dongle Setup screens
   USB            ADB / ADB + net / storage / ...  -> the USB page
   Handheld Link                                   -> file sharing with another handheld
+  Achievements   sign in / ready / pending (N)    -> offline RetroAchievements sync
   About
   Exit
 ```

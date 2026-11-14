@@ -8,7 +8,7 @@ require_adb_mode
 
 WORK="$(native_tmpdir)"
 D=/tmp/ul_dir
-ENV_NOISY="USBLINK_DRYRUN=1 USBLINK_DIR=$D USBLINK_LOG=/tmp/ul_log"
+ENV_NOISY="USBLINK_QUIET= USBLINK_DRYRUN=1 USBLINK_DIR=$D USBLINK_LOG=/tmp/ul_log"
 ENV="$ENV_NOISY USBLINK_QUIET=1"
 run_ul() { "$R" run "$1 sh /tmp/usblink_test.sh"; }
 plan() { run_ul "$ENV" | sed -n 's/^plan: //p'; }
@@ -194,6 +194,27 @@ udc 'not attached'; sleep 2
 check "configured -> not attached rebuilds even when online=0" 1 "$(rebuilds)"
 "$R" run "kill \$(cat $W/run/usblink-watch.pid) 2>/dev/null || true"
 "$R" run "rm -rf $W"
+
+echo "== W3. watch mode retries DHCP after fallback until host ICS answers =="
+"$R" push-text "$WORK/ip" /tmp/ul_netbin/ip 755 2>/dev/null
+"$R" push-text "$WORK/udhcpc" /tmp/ul_netbin/udhcpc 755 2>/dev/null
+settings 'NETWORK=rndis\nADDRESS=dhcp\nDNS=1.1.1.1\n'
+"$R" run "rm -rf $W /tmp/ul_net.log /tmp/ul_lease; mkdir -p $W/g/functions/ffs.adb $W/g/functions/rndis.usb0 $W/udc/fake.udc $W/pw $W/run; echo usbX > $W/g/functions/rndis.usb0/ifname; echo configured > $W/udc/fake.udc/state; echo 1 > $W/pw/online; : > $W/run/usblink-dhcp-pending"
+W3ENV="PATH=/tmp/ul_netbin:\$PATH USBLINK_QUIET=1 USBLINK_TICK=0.2 USBLINK_DHCP_RETRY=2 USBLINK_GADGET=$W/g USBLINK_UDC_CLASS=$W/udc USBLINK_POWER=$W/pw USBLINK_RUN=$W/run USBLINK_DIR=$D USBLINK_LOG=$W/log USBLINK_RESOLV=$W/resolv"
+"$R" run "$W3ENV setsid sh /tmp/usblink_test.sh --watch </dev/null >/dev/null 2>&1 & sleep 1"
+check "still pending when host has not answered" present "$("$R" run "[ -e $W/run/usblink-dhcp-pending ] && echo present || echo absent")"
+has "watcher probed udhcpc" "udhcpc -i usbX -s /tmp/usblink_test.sh" "$("$R" run "cat /tmp/ul_net.log 2>/dev/null")"
+"$R" run "printf 'ip=192.168.137.42\nmask=24\nrouter=192.168.137.1\ndns=192.168.137.1\n' > /tmp/ul_lease"
+sleep 1.2
+"$R" run "kill \$(cat $W/run/usblink-watch.pid) 2>/dev/null || true"
+W3N="$("$R" run "cat /tmp/ul_net.log 2>/dev/null")"
+check "pending flag cleared once lease acquired" absent "$("$R" run "[ -e $W/run/usblink-dhcp-pending ] && echo present || echo absent")"
+has "logs dhcp recovery" "watch: dhcp acquired (192.168.137.42, routed 1)" "$("$R" run "cat $W/log 2>/dev/null")"
+has "removes fallback link-local address" "ip addr del 169.254.170.5/16 dev usbX" "$W3N"
+has "sets leased address" "ip addr add 192.168.137.42/24 dev usbX" "$W3N"
+has "routes via host" "ip route replace default via 192.168.137.1 dev usbX" "$W3N"
+check "keeps configured DNS=1.1.1.1" "nameserver 1.1.1.1 " "$("$R" run "cat $W/resolv 2>/dev/null" | tr '\n' ' ')"
+"$R" run "rm -rf $W /tmp/ul_netbin /tmp/ul_net.log /tmp/ul_lease"
 
 echo "== F. MAC addresses: fixed, locally administered, same suffix =="
 P="$(plan)"

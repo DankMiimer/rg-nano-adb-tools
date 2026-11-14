@@ -15,6 +15,8 @@ import os
 import sys
 import time
 
+import ra_backend
+import ra_gui
 import usb_backend as usb
 import wifi_backend as wifi
 import wifi_gui
@@ -223,18 +225,28 @@ def hub(g):
         st = usb.state()
         rows = []
         if host_cap:
-            rows.append(("Wi-Fi", wifi_gui.wifi_tag(info), "wifi"))
+            rows.append(("Wi-Fi Dongle", wifi_gui.wifi_tag(info), "wifi"))
         rows.append(("USB", usb.tag(st), "usb"))
         if has_hlink():
             rows.append(("Handheld Link", "", "hlink"))
-        rows += [("About", "", "about"), ("Exit", "", "exit")]
+        rows += [
+            ("Achievements", ra_backend.hub_tag(), "ra"),
+            ("About", "", "about"),
+            ("Exit", "", "exit"),
+        ]
         if first:
             # Opened with a cable in and no host talking to it: that is what
-            # USB Link was opened for, so start on USB
+            # USB Link was opened for, so start on USB. Otherwise, if unlocks
+            # are waiting to sync, start directly on Achievements.
             if host_cap and st["mode"] == "adb" and st["power"] and not st["connected"] and not st["host"]:
                 sel = 1
+            elif rows[min(sel, len(rows) - 1)][2] != "ra" and ra_backend.hub_tag().endswith("pending"):
+                for idx, row in enumerate(rows):
+                    if row[2] == "ra":
+                        sel = idx
+                        break
             first = False
-        choice = g.menu("Connect", [(r[0], r[1]) for r in rows], sel=sel)
+        choice = g.menu("Connect", [(r[0], r[1]) for r in rows], status=usb.model(), sel=sel)
         if choice in (None, "QUIT"):
             return
         sel = choice
@@ -248,6 +260,8 @@ def hub(g):
             res = usb_menu(g)
         elif action == "hlink":
             start_hlink(g)
+        elif action == "ra":
+            res = ra_gui.ra_menu(g)
         else:
             screen_about(g)
         if res == "QUIT":

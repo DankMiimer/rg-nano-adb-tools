@@ -327,4 +327,9 @@ def sync_clock() -> str:
     if rc != 0:
         return "date failed: " + out.strip()[:20]
     run(["hwclock", "-w"], timeout=10)
+    try:
+        import ra_clock
+        ra_clock.write_clock_sync(int(utc), tz)
+    except Exception:
+        pass
     return "Set to " + stamp[11:16]

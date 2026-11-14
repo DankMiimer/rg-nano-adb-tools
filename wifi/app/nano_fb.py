@@ -18,6 +18,7 @@ from __future__ import annotations
 import fcntl
 import mmap
 import os
+import select
 import struct
 from typing import Iterator
 
@@ -95,15 +96,23 @@ def rgb565(r: int, g: int, b: int) -> int:
     return ((r & 0xF8) << 8) | ((g & 0xFC) << 3) | (b >> 3)
 
 
-# A small retro palette (Game Boy / MinUI flavored). Override per-theme.
+# Dark midnight-slate + cyan palette (high contrast on small LCDs).
 class Pal:
-    BG = rgb565(15, 56, 15)       # deep GB green
-    BG2 = rgb565(24, 72, 24)      # panel
-    INK = rgb565(155, 188, 15)    # bright GB lime (text)
-    DIM = rgb565(96, 130, 40)     # muted text
-    HI = rgb565(220, 240, 170)    # highlight text
-    SEL = rgb565(48, 98, 48)      # selection bar
-    ACCENT = rgb565(232, 80, 60)  # red accent
+    BG = rgb565(13, 18, 28)       # deep midnight slate
+    BG2 = rgb565(20, 28, 42)      # header / elevated surface
+    CARD = rgb565(19, 26, 38)     # card container fill
+    BORDER = rgb565(46, 62, 88)   # crisp card / rule border
+    INK = rgb565(214, 224, 240)   # primary body text
+    DIM = rgb565(120, 138, 166)   # muted / secondary text
+    HI = rgb565(248, 250, 255)    # crisp white highlight
+    SEL = rgb565(34, 54, 84)      # selected row fill
+    ACCENT = rgb565(56, 189, 248) # electric cyan accent
+    OK = rgb565(52, 211, 153)     # emerald ready / synced
+    OK_BG = rgb565(16, 62, 50)
+    WARN = rgb565(251, 191, 36)   # amber pending / attention
+    WARN_BG = rgb565(68, 48, 16)
+    ERR = rgb565(248, 113, 113)   # coral offline / error
+    ERR_BG = rgb565(74, 26, 32)
     BLACK = rgb565(0, 0, 0)
     WHITE = rgb565(255, 255, 255)
 
@@ -178,6 +187,29 @@ class Framebuffer:
             self.buf[off] = color & 0xFF
             self.buf[off + 1] = (color >> 8) & 0xFF
 
+    def fill_pill(self, x: int, y: int, w: int, h: int, fill: int, border: int | None = None) -> None:
+        """Draw a chamfered pill/card rectangle (1px clipped corners when w,h >= 5)."""
+        if w <= 0 or h <= 0:
+            return
+        if w < 5 or h < 5:
+            self.fill_rect(x, y, w, h, fill)
+            return
+        self.fill_rect(x + 1, y, w - 2, 1, border if border is not None else fill)
+        self.fill_rect(x + 1, y + h - 1, w - 2, 1, border if border is not None else fill)
+        if border is not None:
+            self.fill_rect(x + 1, y + 1, w - 2, h - 2, fill)
+            self.fill_rect(x, y + 1, 1, h - 2, border)
+            self.fill_rect(x + w - 1, y + 1, 1, h - 2, border)
+        else:
+            self.fill_rect(x, y + 1, w, h - 2, fill)
+
+    def bitmap(self, x: int, y: int, rows: tuple[int, ...] | list[int], color: int, width: int = 8) -> None:
+        """Draw a crisp 1-bit monochrome pixel icon (MSB on the left)."""
+        for ry, bits in enumerate(rows):
+            for rx in range(width):
+                if bits & (1 << (width - 1 - rx)):
+                    self.px(x + rx, y + ry, color)
+
     def text(self, x: int, y: int, s: str, color: int, scale: int = 1,
              bg: int | None = None, fnt=None) -> int:
         """Draw a proportional string. fnt=(FONT,GLYPH_H) overrides the default
@@ -248,6 +280,26 @@ class Framebuffer:
                 pass
             self._tty = None
 
+    def poll(self, repeat: bool = False) -> str | None:
+        """Non-blocking button check; drains pending events and returns first press."""
+        want = (1, 2) if repeat else (1,)
+        while True:
+            try:
+                r, _, _ = select.select([self.fd], [], [], 0)
+            except (OSError, ValueError):
+                return None
+            if not r:
+                return None
+            try:
+                data = os.read(self.fd, EV_SIZE)
+            except OSError:
+                return None
+            if len(data) < EV_SIZE:
+                return None
+            _, _, etype, code, value = struct.unpack(EV_FMT, data)
+            if etype == EV_KEY and value in want and code in BTN:
+                return BTN[code]
+
     def close(self) -> None:
         if self.mm is None:
             return
@@ -269,6 +321,26 @@ class Buttons:
             data = os.read(self.fd, EV_SIZE)
             if len(data) < EV_SIZE:
                 continue
+            _, _, etype, code, value = struct.unpack(EV_FMT, data)
+            if etype == EV_KEY and value in want and code in BTN:
+                return BTN[code]
+
+    def poll(self, repeat: bool = False) -> str | None:
+        """Non-blocking button check; drains pending events and returns first press."""
+        want = (1, 2) if repeat else (1,)
+        while True:
+            try:
+                r, _, _ = select.select([self.fd], [], [], 0)
+            except (OSError, ValueError):
+                return None
+            if not r:
+                return None
+            try:
+                data = os.read(self.fd, EV_SIZE)
+            except OSError:
+                return None
+            if len(data) < EV_SIZE:
+                return None
             _, _, etype, code, value = struct.unpack(EV_FMT, data)
             if etype == EV_KEY and value in want and code in BTN:
                 return BTN[code]

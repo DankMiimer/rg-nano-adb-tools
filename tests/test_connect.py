@@ -45,6 +45,7 @@ os.environ.update({
     "USBLINK_GADGET": GADGET, "USBLINK_UDC_CLASS": UDCS, "USBLINK_POWER": POWER,
     "USBLINK_DIR": USBDIR, "USBLINK_RUN": RUN, "WIFI_MUSB": MUSB, "USBMODE_APPS": APPS,
     "WIFI_DATA": os.path.join(T, "wifi"), "WIFI_RUN": os.path.join(T, "wifi-run"),
+    "RA_DATA": os.path.join(T, "raoffline"), "RA_ROMS": os.path.join(T, "roms"),
     "WIFI_SH": stub("wifi.sh", 'echo "wifi=${STUB_WIFI:-off}"\n'),
     "USBLINK_SH": stub("usblink.sh", 'echo "quiet=$USBLINK_QUIET" >> "%s"\n'
                                       '[ -n "$STUB_RESULT" ] && echo "result: $STUB_RESULT"\n'
@@ -337,7 +338,7 @@ class Screens(Base):
 
     def test_hub_rows(self):
         seen = self.run_hub(["menu"])
-        self.assertEqual(seen[0][2], [("Wi-Fi", "off"), ("USB", "ADB"), ("About", ""), ("Exit", "")])
+        self.assertEqual(seen[0][2], [("Wi-Fi Dongle", "off"), ("USB", "ADB"), ("Achievements", "sign in"), ("About", ""), ("Exit", "")])
         self.assertEqual(seen[0][3], 0)
 
     def test_hub_starts_on_usb_after_a_replug(self):
@@ -353,7 +354,7 @@ class Screens(Base):
         os.makedirs(bundled, exist_ok=True)
         with mock.patch.object(connect_gui, "HLINK_DIR", bundled):
             seen = self.run_hub(["menu"])
-        self.assertEqual([r[0] for r in seen[0][2]], ["Wi-Fi", "USB", "Handheld Link", "About", "Exit"])
+        self.assertEqual([r[0] for r in seen[0][2]], ["Wi-Fi Dongle", "USB", "Handheld Link", "Achievements", "About", "Exit"])
 
     def test_handheld_link_takes_over(self):
         bundled = os.path.join(T, "hlink")
@@ -381,7 +382,7 @@ class Screens(Base):
 
     def test_wifi_page_and_back(self):
         seen = self.run_hub(["a", "b", "menu"])
-        self.assertEqual(seen[1][1], "Wi-Fi Setup")
+        self.assertEqual(seen[1][1], "Wi-Fi Dongle")
         self.assertEqual(seen[1][2][-1], ("Back", ""))
         self.assertEqual(seen[2][1], "Connect")
 
@@ -462,8 +463,10 @@ class Screens(Base):
                                      "routed=0 dhcp_failed=1 watch=1")
         port(link="rndis")
         seen = self.run_hub(["down", "a", "a", "a",                 # reconnect result
-                             "down", "down", "down", "down", "a", "a",   # status
-                             "b", "down", "a", "a", "menu"])        # about
+                             "down", "down", "down", "down", "a", "a",   # USB status
+                             "b", "down", "a",                           # Achievements menu
+                             "down", "down", "down", "down", "a", "a",   # RA status
+                             "b", "down", "a", "a", "menu"])             # about
         fb = wifi_gui.Framebuffer()
         for s in seen:
             if s[0] == "message":
@@ -473,8 +476,8 @@ class Screens(Base):
     def test_funkey_s_hides_wifi_and_detects_model(self):
         port(can_host=False)
         self.assertEqual(usb.model(), "FunKey S")
-        seen = self.run_hub(["down", "a", "a", "menu"])
-        self.assertEqual([r[0] for r in seen[0][2]], ["USB", "About", "Exit"])
+        seen = self.run_hub(["down", "down", "a", "a", "menu"])
+        self.assertEqual([r[0] for r in seen[0][2]], ["USB", "Achievements", "About", "Exit"])
         self.assertEqual(seen[1][2][0], "Connect: FunKey S")
 
     def test_gba_mini_window_and_layout(self):
@@ -485,7 +488,7 @@ class Screens(Base):
         os.environ["STUB_RESULT"] = ("connected=1 fellback=0 kind=rndis ip=169.254.170.5 "
                                      "routed=0 dhcp_failed=1 watch=1")
         # Open USB -> Reconnect (6-line message on 160px), then About -> Exit
-        Keys.queue = ["a", "a", "a", "b", "down", "a", "a", "menu"]
+        Keys.queue = ["a", "a", "a", "b", "down", "down", "a", "a", "menu"]
         old = wifi_gui.Buttons
         wifi_gui.Buttons = Keys
         try:
